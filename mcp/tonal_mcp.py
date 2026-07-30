@@ -176,6 +176,36 @@ def _load_multiplier(movement):
     return 2 if movement.get("isBilateral") and info.get("accessory") == "StraightBar" else 1
 
 
+def _activities(data):
+    return data if isinstance(data, list) else data.get("activities", data.get("data", []))
+
+
+def _is_strength_activity(activity):
+    return activity.get("activityType") == "Internal"
+
+
+def _strength_activity_data(endpoint, activity_id, uid, activity_type=None):
+    try:
+        return _api_get(endpoint)
+    except ValueError as error:
+        if str(error).startswith("Tonal API 404:"):
+            if activity_type is None:
+                history = _api_get(f"/v6/users/{uid}/activities", params={"limit": 50})
+                activity_type = next(
+                    (activity.get("activityType") for activity in _activities(history)
+                     if activity.get("activityId") == activity_id),
+                    None,
+                )
+            if activity_type == "External":
+                code = "no_strength_data"
+            elif activity_type == "Internal":
+                code = "detail_unavailable"
+            else:
+                code = "activity_not_found"
+            return {"error": code, "activity_id": activity_id, "status": 404}
+        raise
+
+
 # ── MCP Tools ─────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -249,12 +279,16 @@ def get_profile() -> dict:
 
 
 @mcp.tool()
-def get_workout_history(limit: int = 10) -> dict:
-    """Get recent workout history with titles, volume, duration, and target areas."""
+def get_workout_history(limit: int = 10, strength_only: bool = False) -> dict:
+    """Get recent activity history, optionally limited to Tonal strength workouts."""
     uid = _uid()
     data = _api_get(f"/v6/users/{uid}/activities", params={"limit": limit})
-    activities = data if isinstance(data, list) else data.get("activities", data.get("data", []))
+    activities = _activities(data)
+    if strength_only:
+        activities = [activity for activity in activities if _is_strength_activity(activity)]
     return {"workouts": [{"activity_id": a.get("activityId"), "date": a.get("activityTime","")[:10],
+                          "activity_type": a.get("activityType") or "Unknown",
+                          "has_strength_data": _is_strength_activity(a),
                           "title": a.get("workoutPreview",{}).get("workoutTitle",""),
                           "duration_min": round(a.get("workoutPreview",{}).get("totalDuration",0)/60),
                           "total_volume_lbs": a.get("workoutPreview",{}).get("totalVolume"),
@@ -266,7 +300,11 @@ def get_workout_history(limit: int = 10) -> dict:
 def get_workout_detail(activity_id: str) -> dict:
     """Get full workout detail with per-set actual weights, reps, 1RM, power, and struggling scores."""
     uid = _uid()
-    data = _api_get(f"/v6/users/{uid}/workout-activities/{activity_id}")
+    data = _strength_activity_data(
+        f"/v6/users/{uid}/workout-activities/{activity_id}", activity_id, uid
+    )
+    if "error" in data:
+        return data
     mm = _movement_map()
     movements = {}
     for s in data.get("workoutSetActivity", []):
@@ -314,7 +352,11 @@ def get_workout_detail(activity_id: str) -> dict:
 def get_performance_summary(activity_id: str) -> dict:
     """Get formatted workout summary with movement names, per-set weights, and L/R side splits."""
     uid = _uid()
-    data = _api_get(f"/v6/formatted/users/{uid}/workout-summaries/{activity_id}")
+    data = _strength_activity_data(
+        f"/v6/formatted/users/{uid}/workout-summaries/{activity_id}", activity_id, uid
+    )
+    if "error" in data:
+        return data
     result = {"workout_name": data.get("name",""), "coach": data.get("coachName",""),
               "target_area": data.get("targetArea",""), "date": data.get("localTimestamp","")[:10],
               "movements": []}
@@ -368,15 +410,22 @@ def get_exercise_history(exercise_name: str) -> dict:
                 for mid, m in list(targets.items())[:10]]}
 
     history = _api_get(f"/v6/users/{uid}/activities", params={"limit": 50})
-    activities = history if isinstance(history, list) else history.get("activities", history.get("data", []))
+    activities = _activities(history)
 
     by_date = {}
     for act in activities:
+        if not _is_strength_activity(act):
+            continue
         aid = act.get("activityId")
         if not aid:
             continue
-        detail = _api_get(f"/v6/users/{uid}/workout-activities/{aid}")
-        if isinstance(detail, dict) and "error" in detail:
+        detail = _strength_activity_data(
+            f"/v6/users/{uid}/workout-activities/{aid}",
+            aid,
+            uid,
+            activity_type=act.get("activityType"),
+        )
+        if "error" in detail:
             continue
         for s in detail.get("workoutSetActivity", []):
             if s.get("movementId") not in targets or s.get("warmUp"):
@@ -493,9 +542,10 @@ def get_volume_report(days: int = 30) -> dict:
     """Training volume and frequency analysis over N days, broken down by week and target area."""
     uid = _uid()
     data = _api_get(f"/v6/users/{uid}/activities", params={"limit": min(days, 100)})
-    activities = data if isinstance(data, list) else data.get("activities", data.get("data", []))
+    activities = _activities(data)
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    recent = [a for a in activities if a.get("activityTime","") >= cutoff]
+    recent = [a for a in activities
+              if _is_strength_activity(a) and a.get("activityTime","") >= cutoff]
     if not recent:
         return {"days": days, "workouts": 0}
 

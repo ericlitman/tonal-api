@@ -2,6 +2,7 @@ import importlib.util
 import sys
 import types
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -143,6 +144,166 @@ class WorkoutDetailTests(unittest.TestCase):
             ),
             1,
         )
+
+
+class ActivityTypeTests(unittest.TestCase):
+    def setUp(self):
+        self.internal = {
+            "activityId": "internal-1",
+            "activityTime": "2026-07-29T12:00:00Z",
+            "activityType": "Internal",
+            "workoutPreview": {
+                "workoutTitle": "Strength",
+                "totalDuration": 600,
+                "totalVolume": 100,
+                "targetArea": "FULL BODY",
+            },
+        }
+        self.external = {
+            "activityId": "external-1",
+            "activityTime": "2026-07-28T12:00:00Z",
+            "activityType": "External",
+            "workoutPreview": {
+                "workoutTitle": "",
+                "totalDuration": 3600,
+                "totalVolume": 0,
+                "targetArea": "",
+            },
+        }
+
+    def test_history_exposes_activity_type_and_filters_strength(self):
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(
+                tonal_mcp, "_api_get", return_value=[self.internal, self.external]
+            ),
+        ):
+            all_history = tonal_mcp.get_workout_history()
+            strength_history = tonal_mcp.get_workout_history(strength_only=True)
+
+        self.assertEqual(
+            [
+                (workout["activity_type"], workout["has_strength_data"])
+                for workout in all_history["workouts"]
+            ],
+            [("Internal", True), ("External", False)],
+        )
+        self.assertEqual(
+            [workout["activity_id"] for workout in strength_history["workouts"]],
+            ["internal-1"],
+        )
+
+    def test_volume_report_counts_only_internal_activities(self):
+        activity_time = datetime.now(timezone.utc).isoformat()
+        internal = {**self.internal, "activityTime": activity_time}
+        external = {**self.external, "activityTime": activity_time}
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=[internal, external]),
+        ):
+            report = tonal_mcp.get_volume_report(days=7)
+
+        self.assertEqual(report["total_workouts"], 1)
+        self.assertEqual(report["total_volume_lbs"], 100)
+        self.assertEqual(report["avg_volume_per_session"], 100)
+
+    def test_exercise_history_skips_external_detail_lookup(self):
+        detail = {
+            "workoutSetActivity": [
+                {
+                    "movementId": "movement-1",
+                    "warmUp": False,
+                    "baseWeight": 20,
+                    "repCount": 5,
+                    "volume": 100,
+                    "oneRepMax": 25,
+                }
+            ]
+        }
+
+        def api_get(endpoint, params=None):
+            if endpoint.endswith("/activities"):
+                return [self.external, self.internal]
+            if endpoint.endswith("/workout-activities/internal-1"):
+                return detail
+            self.fail(f"Unexpected detail request: {endpoint}")
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(
+                tonal_mcp,
+                "_movement_map",
+                return_value={"movement-1": {"name": "Bench Press"}},
+            ),
+            patch.object(tonal_mcp, "_api_get", side_effect=api_get),
+        ):
+            history = tonal_mcp.get_exercise_history("Bench")
+
+        self.assertEqual(history["sessions_found"], 1)
+        self.assertEqual(history["sessions"][0]["total_volume_lbs"], 100)
+
+    def test_detail_tools_return_structured_result_for_404(self):
+        def api_get(endpoint, params=None):
+            if endpoint.endswith("/activities"):
+                return [self.external]
+            raise ValueError("Tonal API 404: Not Found")
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", side_effect=api_get),
+        ):
+            raw = tonal_mcp.get_workout_detail("external-1")
+            formatted = tonal_mcp.get_performance_summary("external-1")
+
+        expected = {
+            "error": "no_strength_data",
+            "activity_id": "external-1",
+            "status": 404,
+        }
+        self.assertEqual(raw, expected)
+        self.assertEqual(formatted, expected)
+
+    def test_unknown_activity_404_is_not_classified_as_external(self):
+        def api_get(endpoint, params=None):
+            if endpoint.endswith("/activities"):
+                return [self.external]
+            raise ValueError("Tonal API 404: Not Found")
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", side_effect=api_get),
+        ):
+            result = tonal_mcp.get_workout_detail("unknown-1")
+
+        self.assertEqual(
+            result,
+            {"error": "activity_not_found", "activity_id": "unknown-1", "status": 404},
+        )
+
+    def test_internal_activity_404_is_temporarily_unavailable(self):
+        with patch.object(
+            tonal_mcp,
+            "_api_get",
+            side_effect=ValueError("Tonal API 404: Not Found"),
+        ):
+            result = tonal_mcp._strength_activity_data(
+                "/detail", "internal-1", "user-1", activity_type="Internal"
+            )
+
+        self.assertEqual(
+            result,
+            {"error": "detail_unavailable", "activity_id": "internal-1", "status": 404},
+        )
+
+    def test_strength_detail_propagates_non_404_errors(self):
+        with patch.object(
+            tonal_mcp,
+            "_api_get",
+            side_effect=ValueError("Tonal API 500: unavailable"),
+        ):
+            with self.assertRaisesRegex(ValueError, "500"):
+                tonal_mcp._strength_activity_data("/detail", "activity-1", "user-1")
 
 
 if __name__ == "__main__":

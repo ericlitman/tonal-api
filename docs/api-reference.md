@@ -164,7 +164,7 @@ Returns recent workout activities (Tonal sessions, external activities):
     "activityId": "uuid",
     "userId": "uuid",
     "activityTime": "2026-04-11T18:33:21.38Z",
-    "activityType": "workout",
+    "activityType": "Internal",
     "workoutPreview": {
       "activityId": "uuid",
       "workoutId": "uuid",
@@ -185,12 +185,20 @@ Returns recent workout activities (Tonal sessions, external activities):
 ]
 ```
 
+`activityType` is `Internal` for Tonal strength workouts and `External` for
+other logged activities. Only `Internal` activities have workout-detail and
+formatted-summary records.
+
 ### Workout Detail (Raw Sets)
 ```
 GET /v6/users/{userId}/workout-activities/{activityId}
 ```
 
 Returns the full workout with per-set data. This is the richest data source.
+The MCP detail tools convert detail-endpoint 404s into structured results:
+`no_strength_data` for a known `External` activity, `detail_unavailable` for a
+known `Internal` activity, and `activity_not_found` when the ID is absent from
+the activity feed. Each result includes the `activity_id` and HTTP `status`.
 
 **Top-level fields:**
 | Field | Type | Description |

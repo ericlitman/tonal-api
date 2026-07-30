@@ -189,7 +189,7 @@ Add to your Claude Code `settings.json`, Cursor config, or any MCP client:
 | `get_strength` | Current strength scores |
 | `get_strength_history` | Strength progression |
 | `get_profile` | User profile |
-| `get_workout_history` | Recent workouts |
+| `get_workout_history` | Recent activities, with strength eligibility and optional strength-only filtering |
 | `get_workout_detail` | Per-set weights, 1RM, power, struggling scores |
 | `get_performance_summary` | Formatted summary with L/R splits |
 | `get_exercise_history` | Progressive overload tracking across sessions |
