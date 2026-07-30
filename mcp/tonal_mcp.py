@@ -179,6 +179,10 @@ def _load_multiplier(movement):
     return 2 if movement.get("isBilateral") and info.get("accessory") == "StraightBar" else 1
 
 
+def _number_or_zero(value):
+    return value if type(value) in (int, float) else 0
+
+
 def _score_or_none(value):
     return round(value, 2) if type(value) in (int, float) and 0 <= value <= 1 else None
 
@@ -228,9 +232,11 @@ def _strength_activity_data(endpoint, activity_id, uid, activity_type=None):
         return _api_get(endpoint)
     except ValueError as error:
         if str(error).startswith("Tonal API 404:"):
+            activity_page = None
             if activity_type is None:
+                activity_page = _activity_page(uid)
                 activity_type = next(
-                    (activity.get("activityType") for activity in _activity_page(uid)
+                    (activity.get("activityType") for activity in activity_page
                      if activity.get("activityId") == activity_id),
                     None,
                 )
@@ -238,6 +244,15 @@ def _strength_activity_data(endpoint, activity_id, uid, activity_type=None):
                 code = "no_strength_data"
             elif activity_type == "Internal":
                 code = "detail_unavailable"
+            elif (activity_page is not None
+                  and len(activity_page) == ACTIVITY_PAGE_SIZE):
+                return {
+                    "error": "activity_type_unknown",
+                    "activity_id": activity_id,
+                    "status": 404,
+                    "activity_lookup_complete": False,
+                    "upstream_page_may_be_truncated": True,
+                }
             else:
                 code = "activity_not_found"
             return {"error": code, "activity_id": activity_id, "status": 404}
@@ -372,7 +387,8 @@ def get_workout_detail(activity_id: str) -> dict:
         inconsistency = s.get("inconsistencyScore")
         suggested = s.get("suggestedWeight")
         sd = {"reps": s.get("repCount", 0) if counts_reps else None,
-              "weight_lbs": s.get("baseWeight", 0) * multiplier if on_machine else None,
+              "weight_lbs": (_number_or_zero(s.get("baseWeight")) * multiplier
+                             if on_machine else None),
               "volume_lbs": s.get("volume", 0) if on_machine else None,
               "one_rep_max": (round(s.get("oneRepMax", 0) * multiplier)
                               if on_machine and s.get("oneRepMax") else None),
@@ -526,14 +542,20 @@ def get_exercise_history(exercise_name: str) -> dict:
         if "error" in detail:
             continue
         for s in detail.get("workoutSetActivity", []):
-            if s.get("movementId") not in targets or s.get("warmUp"):
+            movement_id = s.get("movementId")
+            if movement_id not in targets or s.get("warmUp"):
                 continue
+            multiplier = _load_multiplier(targets[movement_id])
+            base_weight = _number_or_zero(s.get("baseWeight"))
+            one_rep_max = _number_or_zero(s.get("oneRepMax"))
             d = act.get("activityTime","")[:10]
             if d not in by_date:
                 by_date[d] = {"date": d, "workout": act.get("workoutPreview",{}).get("workoutTitle",""), "sets": []}
             by_date[d]["sets"].append({
-                "weight_lbs": s.get("baseWeight", 0), "reps": s.get("repCount", 0),
-                "volume_lbs": s.get("volume", 0), "one_rep_max": round(s.get("oneRepMax", 0)) or None})
+                "weight_lbs": base_weight * multiplier,
+                "reps": s.get("repCount", 0),
+                "volume_lbs": s.get("volume", 0),
+                "one_rep_max": round(one_rep_max * multiplier) or None})
 
     sessions = []
     for d in sorted(by_date):

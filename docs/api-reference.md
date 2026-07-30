@@ -207,8 +207,11 @@ GET /v6/users/{userId}/workout-activities/{activityId}
 Returns the full workout with per-set data. This is the richest data source.
 The MCP detail tools convert detail-endpoint 404s into structured results:
 `no_strength_data` for a known `External` activity, `detail_unavailable` for a
-known `Internal` activity, and `activity_not_found` when the ID is absent from
-the activity feed. Each result includes the `activity_id` and HTTP `status`.
+known `Internal` activity, and `activity_not_found` when the ID is absent from a
+short or exhausted activity page. If the ID is absent from a full fixed 50-row
+page, the result is `activity_type_unknown` with
+`activity_lookup_complete: false` and `upstream_page_may_be_truncated: true`.
+Each result includes the `activity_id` and HTTP `status`.
 
 **Top-level fields:**
 | Field | Type | Description |
@@ -263,6 +266,9 @@ consistency sentinels to `null` without discarding legitimate zero scores on
 performed sets. For explicitly unperformed sets, placeholder-zero difficulty,
 consistency, and suggested-weight values are `null`; actual/count fields remain
 numeric zeros and configured mode flags remain available.
+Bilateral `StraightBar` load fields use total cable load (2x the upstream
+per-arm/base load) consistently in CLI detail, MCP detail, and MCP exercise
+history. Volume remains the upstream total and is not doubled.
 Off-machine, duration-based movements expose actual `duration_sec`,
 `prescribed_duration_sec`, and Tonal's separate `duration_based_rep_goal`;
 per-set resistance-only measurements are `null`, and the movement is marked

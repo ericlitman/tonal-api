@@ -255,6 +255,15 @@ def _movement_name(movement_map, mid):
     return m.get("name", mid[:8]) if m else mid[:8]
 
 
+def _load_multiplier(movement):
+    info = movement.get("onMachineInfo") or {}
+    return 2 if movement.get("isBilateral") and info.get("accessory") == "StraightBar" else 1
+
+
+def _scaled_load(value, multiplier):
+    return value * multiplier if type(value) in (int, float) else None
+
+
 def _score_or_none(value):
     return round(value, 2) if type(value) in (int, float) and 0 <= value <= 1 else None
 
@@ -521,6 +530,7 @@ def cmd_detail(args):
         movement = movement_map.get(mid, {})
         on_machine = movement.get("onMachine") is not False
         counts_reps = movement.get("countReps") is not False
+        load_multiplier = _load_multiplier(movement)
         if mid not in movements:
             movements[mid] = {
                 "movement_id": mid,
@@ -534,17 +544,24 @@ def cmd_detail(args):
         performed = _set_was_performed(s)
         inconsistency = s.get("inconsistencyScore")
         suggested = s.get("suggestedWeight")
+        weight = _scaled_load(
+            s.get("baseWeight", s.get("avgWeight", 0)), load_multiplier
+        )
+        if weight is None:
+            weight = 0
+        max_weight = _scaled_load(s.get("maxWeight"), load_multiplier)
+        min_weight = _scaled_load(s.get("minWeight"), load_multiplier)
+        one_rep_max = _scaled_load(s.get("oneRepMax"), load_multiplier)
         set_data = {
             "reps": (s.get("repCount", s.get("prescribedReps", 0))
                      if counts_reps else None),
-            "weight_lbs": (s.get("baseWeight", s.get("avgWeight", 0))
-                           if on_machine else None),
-            "max_weight_lbs": s.get("maxWeight") if on_machine else None,
-            "min_weight_lbs": s.get("minWeight") if on_machine else None,
+            "weight_lbs": weight if on_machine else None,
+            "max_weight_lbs": max_weight if on_machine else None,
+            "min_weight_lbs": min_weight if on_machine else None,
             "volume_lbs": (s.get("volume", s.get("totalVolume", 0))
                            if on_machine else None),
-            "one_rep_max": (round(s.get("oneRepMax", 0))
-                            if on_machine and s.get("oneRepMax") else None),
+            "one_rep_max": (round(one_rep_max)
+                            if on_machine and one_rep_max else None),
             "max_power_watts": (round(s.get("maxConPower", 0))
                                 if on_machine and s.get("maxConPower") else None),
             "rom_inches": (round(rom, 1)
@@ -553,7 +570,7 @@ def cmd_detail(args):
                                     if on_machine and performed else None),
             "struggling_score": (_score_or_none(s.get("strugglingScore"))
                                  if on_machine and performed else None),
-            "suggested_weight": (round(suggested, 1)
+            "suggested_weight": (round(suggested * load_multiplier, 1)
                                  if (on_machine
                                      and performed
                                      and type(suggested) in (int, float)

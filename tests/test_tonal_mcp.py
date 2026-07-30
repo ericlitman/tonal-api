@@ -4,7 +4,7 @@ import types
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 
 class FakeFastMCP:
@@ -176,6 +176,157 @@ class WorkoutDetailTests(unittest.TestCase):
                 {"isBilateral": True, "onMachineInfo": {"accessory": "Handles"}}
             ),
             1,
+        )
+
+    def test_straight_bar_loads_match_cli_mcp_detail_and_exercise_history(self):
+        activity = {
+            "id": "activity-1",
+            "totalVolume": 100,
+            "workoutSetActivity": [
+                {
+                    "movementId": "straight-bar",
+                    "repCount": 4,
+                    "baseWeight": 25,
+                    "maxWeight": 30,
+                    "minWeight": 20,
+                    "volume": 100,
+                    "oneRepMax": 40,
+                    "suggestedWeight": 27.5,
+                    "beginTime": "2026-07-30T12:00:00Z",
+                }
+            ],
+        }
+        movement_map = {
+            "straight-bar": {
+                "name": "Barbell Bench Press",
+                "onMachine": True,
+                "countReps": True,
+                "isBilateral": True,
+                "onMachineInfo": {"accessory": "StraightBar"},
+            }
+        }
+        detail_endpoint = "/v6/users/user-1/workout-activities/activity-1"
+        activities_endpoint = "/v6/users/user-1/activities"
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activity) as mcp_get,
+            patch.object(tonal_mcp, "_movement_map", return_value=movement_map),
+        ):
+            mcp_detail = tonal_mcp.get_workout_detail("activity-1")
+        mcp_get.assert_called_once_with(detail_endpoint)
+
+        with (
+            patch.object(tonal_tool, "get_user_id", return_value="user-1"),
+            patch.object(tonal_tool, "api_get", return_value=activity) as cli_get,
+            patch.object(
+                tonal_tool, "_get_movement_map", return_value=movement_map
+            ),
+        ):
+            cli_detail = tonal_tool.cmd_detail(["activity-1"])
+        cli_get.assert_called_once_with(detail_endpoint)
+
+        activity_summary = {
+            "activityId": "activity-1",
+            "activityTime": "2026-07-30T12:00:00Z",
+            "activityType": "Internal",
+            "workoutPreview": {"workoutTitle": "Strength"},
+        }
+
+        def history_api_get(endpoint, params=None):
+            if endpoint == activities_endpoint:
+                self.assertEqual(
+                    params, {"limit": tonal_mcp.ACTIVITY_PAGE_SIZE}
+                )
+                return [activity_summary]
+            if endpoint == detail_endpoint:
+                self.assertIsNone(params)
+                return activity
+            self.fail(f"Unexpected API request: {endpoint}")
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(
+                tonal_mcp, "_api_get", side_effect=history_api_get
+            ) as history_get,
+            patch.object(tonal_mcp, "_movement_map", return_value=movement_map),
+        ):
+            history = tonal_mcp.get_exercise_history("Barbell Bench")
+
+        history_get.assert_has_calls(
+            [
+                call(
+                    activities_endpoint,
+                    params={"limit": tonal_mcp.ACTIVITY_PAGE_SIZE},
+                ),
+                call(detail_endpoint),
+            ]
+        )
+        self.assertEqual(history_get.call_count, 2)
+
+        mcp_set = mcp_detail["movements"][0]["set_details"][0]
+        cli_set = cli_detail["movements"][0]["set_details"][0]
+        for field in ("weight_lbs", "one_rep_max", "suggested_weight"):
+            self.assertEqual(cli_set[field], mcp_set[field])
+        self.assertEqual(mcp_set["weight_lbs"], 50)
+        self.assertEqual(mcp_set["one_rep_max"], 80)
+        self.assertEqual(mcp_set["suggested_weight"], 55)
+        self.assertEqual(cli_set["max_weight_lbs"], 60)
+        self.assertEqual(cli_set["min_weight_lbs"], 40)
+        self.assertEqual(cli_detail["movements"][0]["max_weight_lbs"], 50)
+
+        self.assertEqual(history["sessions_found"], 1)
+        history_session = history["sessions"][0]
+        self.assertEqual(history_session["avg_weight_lbs"], 50)
+        self.assertEqual(history_session["best_1rm"], 80)
+        self.assertEqual(history_session["total_volume_lbs"], 100)
+
+    def test_null_base_weight_is_zero_in_mcp_and_cli_detail(self):
+        activity = {
+            "id": "activity-1",
+            "totalVolume": 0,
+            "workoutSetActivity": [
+                {
+                    "movementId": "machine",
+                    "repCount": 5,
+                    "baseWeight": None,
+                    "volume": 0,
+                    "beginTime": "2026-07-30T12:00:00Z",
+                }
+            ],
+        }
+        movement_map = {
+            "machine": {
+                "name": "Bench Press",
+                "onMachine": True,
+                "countReps": True,
+            }
+        }
+        detail_endpoint = "/v6/users/user-1/workout-activities/activity-1"
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activity) as mcp_get,
+            patch.object(tonal_mcp, "_movement_map", return_value=movement_map),
+        ):
+            mcp_result = tonal_mcp.get_workout_detail("activity-1")
+        mcp_get.assert_called_once_with(detail_endpoint)
+
+        with (
+            patch.object(tonal_tool, "get_user_id", return_value="user-1"),
+            patch.object(tonal_tool, "api_get", return_value=activity) as cli_get,
+            patch.object(
+                tonal_tool, "_get_movement_map", return_value=movement_map
+            ),
+        ):
+            cli_result = tonal_tool.cmd_detail(["activity-1"])
+        cli_get.assert_called_once_with(detail_endpoint)
+
+        self.assertEqual(
+            mcp_result["movements"][0]["set_details"][0]["weight_lbs"], 0
+        )
+        self.assertEqual(
+            cli_result["movements"][0]["set_details"][0]["weight_lbs"], 0
         )
 
     def test_detail_filters_rest_and_normalizes_duration_movements(self):
@@ -792,6 +943,54 @@ class ActivityTypeTests(unittest.TestCase):
         self.assertEqual(
             result,
             {"error": "activity_not_found", "activity_id": "unknown-1", "status": 404},
+        )
+
+    def test_unknown_activity_404_reports_incomplete_full_page_lookup(self):
+        activities = [
+            {**self.external, "activityId": f"external-{index}"}
+            for index in range(tonal_mcp.ACTIVITY_PAGE_SIZE)
+        ]
+        detail_endpoint = "/v6/users/user-1/workout-activities/unknown-1"
+        activities_endpoint = "/v6/users/user-1/activities"
+
+        def api_get(endpoint, params=None):
+            if endpoint == detail_endpoint:
+                self.assertIsNone(params)
+                raise ValueError("Tonal API 404: Not Found")
+            if endpoint == activities_endpoint:
+                self.assertEqual(
+                    params, {"limit": tonal_mcp.ACTIVITY_PAGE_SIZE}
+                )
+                return activities
+            self.fail(f"Unexpected API request: {endpoint}")
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(
+                tonal_mcp, "_api_get", side_effect=api_get
+            ) as mocked_api_get,
+        ):
+            result = tonal_mcp.get_workout_detail("unknown-1")
+
+        mocked_api_get.assert_has_calls(
+            [
+                call(detail_endpoint),
+                call(
+                    activities_endpoint,
+                    params={"limit": tonal_mcp.ACTIVITY_PAGE_SIZE},
+                ),
+            ]
+        )
+        self.assertEqual(mocked_api_get.call_count, 2)
+        self.assertEqual(
+            result,
+            {
+                "error": "activity_type_unknown",
+                "activity_id": "unknown-1",
+                "status": 404,
+                "activity_lookup_complete": False,
+                "upstream_page_may_be_truncated": True,
+            },
         )
 
     def test_internal_activity_404_is_temporarily_unavailable(self):
