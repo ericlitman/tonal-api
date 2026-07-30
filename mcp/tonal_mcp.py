@@ -171,6 +171,11 @@ def _movement_map():
     return {m["id"]: m for m in movements}
 
 
+def _load_multiplier(movement):
+    info = movement.get("onMachineInfo") or {}
+    return 2 if movement.get("isBilateral") and info.get("accessory") == "StraightBar" else 1
+
+
 # ── MCP Tools ─────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -266,14 +271,17 @@ def get_workout_detail(activity_id: str) -> dict:
     movements = {}
     for s in data.get("workoutSetActivity", []):
         mid = s.get("movementId", "")
+        movement = mm.get(mid, {})
         if mid not in movements:
-            m = mm.get(mid, {})
-            movements[mid] = {"name": m.get("name", mid[:8]), "movement_id": mid, "sets": [], "warmup_sets": []}
-        sd = {"reps": s.get("repCount", 0), "weight_lbs": s.get("baseWeight", 0),
-              "volume_lbs": s.get("volume", 0), "one_rep_max": round(s.get("oneRepMax", 0)) or None,
+            movements[mid] = {"name": movement.get("name", mid[:8]), "movement_id": mid,
+                              "sets": [], "warmup_sets": []}
+        multiplier = _load_multiplier(movement)
+        sd = {"reps": s.get("repCount", 0), "weight_lbs": s.get("baseWeight", 0) * multiplier,
+              "volume_lbs": s.get("volume", 0),
+              "one_rep_max": round(s.get("oneRepMax", 0) * multiplier) if s.get("oneRepMax") else None,
               "max_power_watts": round(s.get("maxConPower", 0)) or None,
               "struggling_score": round(s.get("strugglingScore", 0), 2) if s.get("strugglingScore") else None,
-              "suggested_weight": round(s.get("suggestedWeight", 0), 1) if s.get("suggestedWeight") else None,
+              "suggested_weight": round(s.get("suggestedWeight", 0) * multiplier, 1) if s.get("suggestedWeight") else None,
               "side": s.get("movementSide", "Both")}
         if s.get("warmUp"):
             movements[mid]["warmup_sets"].append(sd)
@@ -283,13 +291,18 @@ def get_workout_detail(activity_id: str) -> dict:
     summaries = []
     for mid, m in movements.items():
         ws = m["sets"]
-        if ws:
+        warmup_sets = m["warmup_sets"]
+        if ws or warmup_sets:
             weights = [s["weight_lbs"] for s in ws if s["weight_lbs"]]
+            working_volume = sum(s["volume_lbs"] for s in ws)
+            warmup_volume = sum(s["volume_lbs"] for s in warmup_sets)
             summaries.append({"name": m["name"], "movement_id": mid,
-                              "working_sets": len(ws), "warmup_sets": len(m["warmup_sets"]),
+                              "working_sets": len(ws), "warmup_sets": len(warmup_sets),
                               "avg_weight_lbs": round(sum(weights)/len(weights),1) if weights else 0,
                               "total_reps": sum(s["reps"] for s in ws),
-                              "total_volume_lbs": sum(s["volume_lbs"] for s in ws),
+                              "working_volume_lbs": working_volume,
+                              "warmup_volume_lbs": warmup_volume,
+                              "total_volume_lbs": working_volume + warmup_volume,
                               "best_1rm": max((s["one_rep_max"] for s in ws if s["one_rep_max"]), default=None),
                               "set_details": ws})
     return {"activity_id": data.get("id"), "total_duration_min": round(data.get("totalDuration",0)/60),
