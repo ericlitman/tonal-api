@@ -481,7 +481,7 @@ def cmd_history(args):
     return {"workouts": results, "count": len(results)}
 
 def cmd_detail(args):
-    """Full workout detail with per-set actual weights, reps, 1RM, power, struggling score."""
+    """Full workout detail with raw per-set load, ROM, consistency, modes, and power."""
     if not args:
         return {"error": "Usage: tonal_tool.py detail <activity_id>"}
     uid = get_user_id()
@@ -505,6 +505,8 @@ def cmd_detail(args):
                 "sets": [],
                 "warm_up_sets": [],
             }
+        rom = s.get("rom")
+        inconsistency = s.get("inconsistencyScore")
         set_data = {
             "reps": s.get("repCount", s.get("prescribedReps", 0)),
             "weight_lbs": s.get("baseWeight", s.get("avgWeight", 0)),
@@ -513,12 +515,17 @@ def cmd_detail(args):
             "volume_lbs": s.get("volume", s.get("totalVolume", 0)),
             "one_rep_max": round(s.get("oneRepMax", 0)) if s.get("oneRepMax") else None,
             "max_power_watts": round(s.get("maxConPower", 0)) if s.get("maxConPower") else None,
-            "rom_inches": round(s.get("rom", 0), 1) if s.get("rom") else None,
+            "rom_inches": round(rom, 1) if rom is not None and rom > 0 else None,
+            "inconsistency_score": (round(inconsistency, 2)
+                                    if inconsistency is not None and inconsistency > 0 else None),
             "struggling_score": round(s.get("strugglingScore", 0), 2) if s.get("strugglingScore") else None,
             "suggested_weight": round(s.get("suggestedWeight", 0), 1) if s.get("suggestedWeight") else None,
-            "spotter": s.get("spotterMode", "OFF") != "OFF",
-            "eccentric": s.get("eccentric", False),
-            "chains": s.get("chains", False),
+            "spotter": (bool(s["spotter"]) if s.get("spotter") is not None
+                        else s.get("spotterMode", "OFF") not in (None, "", "OFF")),
+            "eccentric": bool(s.get("eccentric", False)),
+            "chains": bool(s.get("chains", False)),
+            "burnout": bool(s.get("burnout", False)),
+            "drop_set": bool(s.get("dropSet", False)),
             "side": s.get("movementSide", "Both"),
             "duration_sec": s.get("duration"),
         }
@@ -531,10 +538,12 @@ def cmd_detail(args):
     movement_summaries = []
     for mid, m in movements.items():
         working_sets = m["sets"]
-        if working_sets:
+        warm_up_sets = m["warm_up_sets"]
+        if working_sets or warm_up_sets:
             weights = [s["weight_lbs"] for s in working_sets if s["weight_lbs"]]
             reps = [s["reps"] for s in working_sets if s["reps"]]
             volumes = [s["volume_lbs"] for s in working_sets if s["volume_lbs"]]
+            warm_up_volume = sum(s["volume_lbs"] for s in warm_up_sets)
             orms = [s["one_rep_max"] for s in working_sets if s["one_rep_max"]]
             powers = [s["max_power_watts"] for s in working_sets if s["max_power_watts"]]
             struggles = [s["struggling_score"] for s in working_sets if s["struggling_score"] is not None]
@@ -542,15 +551,18 @@ def cmd_detail(args):
                 "movement_id": mid,
                 "name": m["name"],
                 "working_sets": len(working_sets),
-                "warm_up_sets": len(m["warm_up_sets"]),
+                "warm_up_sets": len(warm_up_sets),
                 "avg_weight_lbs": round(sum(weights) / len(weights), 1) if weights else 0,
                 "max_weight_lbs": max(weights) if weights else 0,
                 "total_reps": sum(reps),
-                "total_volume_lbs": sum(volumes),
+                "working_volume_lbs": sum(volumes),
+                "warmup_volume_lbs": warm_up_volume,
+                "total_volume_lbs": sum(volumes) + warm_up_volume,
                 "best_1rm": max(orms) if orms else None,
                 "avg_power_watts": round(sum(powers) / len(powers)) if powers else None,
                 "avg_struggling": round(sum(struggles) / len(struggles), 2) if struggles else None,
                 "set_details": working_sets,
+                "warmup_set_details": warm_up_sets,
             }
             # Include Tonal's suggested next weight if available
             suggestions = [s["suggested_weight"] for s in working_sets if s.get("suggested_weight")]

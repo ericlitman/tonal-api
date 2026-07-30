@@ -26,6 +26,11 @@ spec = importlib.util.spec_from_file_location("tonal_mcp", module_path)
 tonal_mcp = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tonal_mcp)
 
+cli_path = Path(__file__).parents[1] / "tonal_tool.py"
+cli_spec = importlib.util.spec_from_file_location("tonal_tool", cli_path)
+tonal_tool = importlib.util.module_from_spec(cli_spec)
+cli_spec.loader.exec_module(tonal_tool)
+
 
 class WorkoutDetailTests(unittest.TestCase):
     def test_normalizes_straight_bar_load_and_includes_warmup_volume(self):
@@ -41,6 +46,9 @@ class WorkoutDetailTests(unittest.TestCase):
                     "volume": 50,
                     "oneRepMax": 34.8,
                     "suggestedWeight": 43.8,
+                    "rom": 10.25,
+                    "inconsistencyScore": 0.1,
+                    "spotterMode": "SPOTTER",
                     "warmUp": True,
                 },
                 {
@@ -50,6 +58,14 @@ class WorkoutDetailTests(unittest.TestCase):
                     "volume": 100,
                     "oneRepMax": 52.36,
                     "suggestedWeight": 49.39,
+                    "rom": 22.345,
+                    "inconsistencyScore": 0.2345,
+                    "spotter": True,
+                    "eccentric": True,
+                    "chains": False,
+                    "burnout": True,
+                    "dropSet": False,
+                    "duration": 31,
                     "warmUp": False,
                 },
                 {
@@ -59,6 +75,8 @@ class WorkoutDetailTests(unittest.TestCase):
                     "volume": 60,
                     "oneRepMax": 38,
                     "suggestedWeight": 32,
+                    "rom": 0,
+                    "inconsistencyScore": -1,
                     "warmUp": False,
                 },
                 {
@@ -104,12 +122,27 @@ class WorkoutDetailTests(unittest.TestCase):
         self.assertEqual(straight_bar["set_details"][0]["weight_lbs"], 84)
         self.assertEqual(straight_bar["set_details"][0]["one_rep_max"], 105)
         self.assertEqual(straight_bar["set_details"][0]["suggested_weight"], 98.8)
+        self.assertEqual(straight_bar["set_details"][0]["rom_inches"], 22.3)
+        self.assertEqual(straight_bar["set_details"][0]["inconsistency_score"], 0.23)
+        self.assertTrue(straight_bar["set_details"][0]["spotter"])
+        self.assertTrue(straight_bar["set_details"][0]["eccentric"])
+        self.assertFalse(straight_bar["set_details"][0]["chains"])
+        self.assertTrue(straight_bar["set_details"][0]["burnout"])
+        self.assertFalse(straight_bar["set_details"][0]["drop_set"])
+        self.assertEqual(straight_bar["set_details"][0]["duration_sec"], 31)
+        self.assertEqual(straight_bar["warmup_set_details"][0]["rom_inches"], 10.2)
+        self.assertEqual(
+            straight_bar["warmup_set_details"][0]["inconsistency_score"], 0.1
+        )
+        self.assertTrue(straight_bar["warmup_set_details"][0]["spotter"])
         self.assertEqual(straight_bar["working_volume_lbs"], 100)
         self.assertEqual(straight_bar["warmup_volume_lbs"], 50)
         self.assertEqual(straight_bar["total_volume_lbs"], 150)
 
         self.assertEqual(handles["set_details"][0]["weight_lbs"], 30)
         self.assertEqual(handles["set_details"][0]["one_rep_max"], 38)
+        self.assertIsNone(handles["set_details"][0]["rom_inches"])
+        self.assertIsNone(handles["set_details"][0]["inconsistency_score"])
         self.assertEqual(handles["total_volume_lbs"], 60)
 
         self.assertEqual(warmup_only["working_sets"], 0)
@@ -143,6 +176,108 @@ class WorkoutDetailTests(unittest.TestCase):
                 {"isBilateral": True, "onMachineInfo": {"accessory": "Handles"}}
             ),
             1,
+        )
+
+    def test_cli_detail_exposes_same_performance_fields(self):
+        activity = {
+            "id": "activity-1",
+            "workoutSetActivity": [
+                {
+                    "movementId": "movement-1",
+                    "repCount": 5,
+                    "baseWeight": 20,
+                    "volume": 100,
+                    "rom": 12.345,
+                    "inconsistencyScore": 0.4567,
+                    "spotter": True,
+                    "eccentric": True,
+                    "chains": True,
+                    "burnout": False,
+                    "dropSet": True,
+                    "duration": 25,
+                },
+                {
+                    "movementId": "movement-1",
+                    "repCount": 2,
+                    "baseWeight": 10,
+                    "volume": 20,
+                    "rom": None,
+                    "inconsistencyScore": None,
+                    "spotterMode": "SPOTTER",
+                    "warmUp": True,
+                }
+            ],
+        }
+        with (
+            patch.object(tonal_tool, "get_user_id", return_value="user-1"),
+            patch.object(tonal_tool, "api_get", return_value=activity),
+            patch.object(
+                tonal_tool,
+                "_get_movement_map",
+                return_value={"movement-1": {"name": "Bench Press"}},
+            ),
+        ):
+            result = tonal_tool.cmd_detail(["activity-1"])
+
+        set_detail = result["movements"][0]["set_details"][0]
+        self.assertEqual(set_detail["rom_inches"], 12.3)
+        self.assertEqual(set_detail["inconsistency_score"], 0.46)
+        self.assertTrue(set_detail["spotter"])
+        self.assertTrue(set_detail["eccentric"])
+        self.assertTrue(set_detail["chains"])
+        self.assertFalse(set_detail["burnout"])
+        self.assertTrue(set_detail["drop_set"])
+        self.assertEqual(set_detail["duration_sec"], 25)
+        self.assertEqual(result["movements"][0]["working_volume_lbs"], 100)
+        self.assertEqual(result["movements"][0]["warmup_volume_lbs"], 20)
+        self.assertEqual(result["movements"][0]["total_volume_lbs"], 120)
+        warmup_detail = result["movements"][0]["warmup_set_details"][0]
+        self.assertIsNone(warmup_detail["rom_inches"])
+        self.assertIsNone(warmup_detail["inconsistency_score"])
+        self.assertTrue(warmup_detail["spotter"])
+
+    def test_performance_summary_preserves_left_right_splits(self):
+        formatted = {
+            "movementSets": [
+                {
+                    "movementName": "Single-Arm Press",
+                    "sets": [
+                        {
+                            "repCount": 8,
+                            "weight": 20,
+                            "leftSideMovementSet": {"repCount": 8, "weight": 19},
+                            "rightSideMovementSet": {
+                                "repCount": 7,
+                                "weight": 20,
+                                "oneRepMax": 24,
+                                "maxConPower": 100,
+                                "totalVolume": 140,
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(
+                tonal_mcp, "_strength_activity_data", return_value=formatted
+            ),
+        ):
+            result = tonal_mcp.get_performance_summary("activity-1")
+
+        set_detail = result["movements"][0]["sets"][0]
+        self.assertEqual(set_detail["left"]["reps"], 8)
+        self.assertEqual(set_detail["left"]["weight_lbs"], 19)
+        self.assertEqual(
+            set_detail["right"],
+            {
+                "reps": 7,
+                "weight_lbs": 20,
+                "one_rep_max": 24,
+                "max_power_watts": 100,
+                "volume_lbs": 140,
+            },
         )
 
 

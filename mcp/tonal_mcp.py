@@ -298,7 +298,7 @@ def get_workout_history(limit: int = 10, strength_only: bool = False) -> dict:
 
 @mcp.tool()
 def get_workout_detail(activity_id: str) -> dict:
-    """Get full workout detail with per-set actual weights, reps, 1RM, power, and struggling scores."""
+    """Get raw per-set load, ROM, consistency, mode flags, power, and difficulty metrics."""
     uid = _uid()
     data = _strength_activity_data(
         f"/v6/users/{uid}/workout-activities/{activity_id}", activity_id, uid
@@ -314,12 +314,24 @@ def get_workout_detail(activity_id: str) -> dict:
             movements[mid] = {"name": movement.get("name", mid[:8]), "movement_id": mid,
                               "sets": [], "warmup_sets": []}
         multiplier = _load_multiplier(movement)
+        rom = s.get("rom")
+        inconsistency = s.get("inconsistencyScore")
         sd = {"reps": s.get("repCount", 0), "weight_lbs": s.get("baseWeight", 0) * multiplier,
               "volume_lbs": s.get("volume", 0),
               "one_rep_max": round(s.get("oneRepMax", 0) * multiplier) if s.get("oneRepMax") else None,
               "max_power_watts": round(s.get("maxConPower", 0)) or None,
+              "rom_inches": round(rom, 1) if rom is not None and rom > 0 else None,
+              "inconsistency_score": (round(inconsistency, 2)
+                                      if inconsistency is not None and inconsistency > 0 else None),
               "struggling_score": round(s.get("strugglingScore", 0), 2) if s.get("strugglingScore") else None,
               "suggested_weight": round(s.get("suggestedWeight", 0) * multiplier, 1) if s.get("suggestedWeight") else None,
+              "spotter": (bool(s["spotter"]) if s.get("spotter") is not None
+                          else s.get("spotterMode", "OFF") not in (None, "", "OFF")),
+              "eccentric": bool(s.get("eccentric", False)),
+              "chains": bool(s.get("chains", False)),
+              "burnout": bool(s.get("burnout", False)),
+              "drop_set": bool(s.get("dropSet", False)),
+              "duration_sec": s.get("duration"),
               "side": s.get("movementSide", "Both")}
         if s.get("warmUp"):
             movements[mid]["warmup_sets"].append(sd)
@@ -342,7 +354,8 @@ def get_workout_detail(activity_id: str) -> dict:
                               "warmup_volume_lbs": warmup_volume,
                               "total_volume_lbs": working_volume + warmup_volume,
                               "best_1rm": max((s["one_rep_max"] for s in ws if s["one_rep_max"]), default=None),
-                              "set_details": ws})
+                              "set_details": ws,
+                              "warmup_set_details": warmup_sets})
     return {"activity_id": data.get("id"), "total_duration_min": round(data.get("totalDuration",0)/60),
             "total_volume_lbs": data.get("totalVolume"), "percent_completed": data.get("percentCompleted"),
             "movements": summaries}
@@ -367,11 +380,17 @@ def get_performance_summary(activity_id: str) -> dict:
                   "one_rep_max": s.get("oneRepMax"), "warm_up": s.get("warmUp", False),
                   "suggested_weight_change": s.get("suggestedWeightChange", 0)}
             if s.get("leftSideMovementSet"):
-                si["left"] = {"reps": s["leftSideMovementSet"].get("repCount"),
-                              "weight_lbs": s["leftSideMovementSet"].get("weight")}
+                left = s["leftSideMovementSet"]
+                si["left"] = {"reps": left.get("repCount"), "weight_lbs": left.get("weight"),
+                              "one_rep_max": left.get("oneRepMax"),
+                              "max_power_watts": left.get("maxConPower"),
+                              "volume_lbs": left.get("totalVolume", 0)}
             if s.get("rightSideMovementSet"):
-                si["right"] = {"reps": s["rightSideMovementSet"].get("repCount"),
-                               "weight_lbs": s["rightSideMovementSet"].get("weight")}
+                right = s["rightSideMovementSet"]
+                si["right"] = {"reps": right.get("repCount"), "weight_lbs": right.get("weight"),
+                               "one_rep_max": right.get("oneRepMax"),
+                               "max_power_watts": right.get("maxConPower"),
+                               "volume_lbs": right.get("totalVolume", 0)}
             mov["sets"].append(si)
         result["movements"].append(mov)
     return result

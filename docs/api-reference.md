@@ -253,6 +253,8 @@ GET /v6/formatted/users/{userId}/workout-summaries/{activityId}
 ```
 
 Returns a pre-aggregated summary with movement names and per-movement totals. Includes left/right side splits for unilateral exercises.
+Those split objects exist only on this formatted endpoint. The raw-detail tools
+preserve upstream `movementSide` as-is and do not join the two endpoints.
 
 **Response structure:**
 ```json

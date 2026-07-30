@@ -117,6 +117,17 @@ When you pull workout details, Tonal gives you remarkably rich per-set data:
 | `inconsistencyScore` | Rep-to-rep consistency |
 | `movementSide` | "Both", "Left", or "Right" |
 
+Both the CLI `detail` command and MCP `get_workout_detail` project ROM,
+consistency, spotter, eccentric, chains, burnout, drop-set, and duration fields.
+Unmeasured ROM and consistency values (`0` or `-1`) are returned as `null`.
+
+Raw detail frequently reports `movementSide: "Both"` even for unilateral
+movements. Use MCP `get_performance_summary` when you need the formatted
+`left` / `right` set objects; `get_workout_detail` does not make a second API
+request to join those objects into the raw response. CLI users can get the
+same formatted source with `performance <activity_id>` (`left_side` /
+`right_side`).
+
 ## Workout JSON format
 
 Workouts are defined as blocks of exercises. Exercises within a block are supersetted.
