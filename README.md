@@ -120,8 +120,11 @@ When you pull workout details, Tonal gives you remarkably rich per-set data:
 Both the CLI `detail` command and MCP `get_workout_detail` project ROM,
 consistency, spotter, eccentric, chains, burnout, drop-set, and duration fields.
 The reserved Rest movement (`00000000-0000-0000-0000-000000000005`) is
-excluded. Difficulty/consistency sentinels (`-1`) are returned as `null`, while
-valid zero scores remain `0`.
+excluded. Difficulty/consistency sentinels (`-1`) are returned as `null`.
+Difficulty, consistency, and suggested-weight placeholder zeros on explicitly
+unperformed sets are also `null`, while valid zero scores on performed sets
+remain `0`. Actual/count fields stay numeric, and configured mode flags remain
+available, when a prescribed set was not performed.
 
 For catalog movements with `onMachine: false` and `countReps: false`, detail
 responses use `measurement_type: "duration"`, expose `duration_sec` and

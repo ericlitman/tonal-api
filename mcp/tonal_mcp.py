@@ -52,6 +52,7 @@ GET_TIMEOUT = 15
 POST_TIMEOUT = 30
 ACTIVITY_PAGE_SIZE = 50
 REST_MOVEMENT_ID = "00000000-0000-0000-0000-000000000005"
+UNPERFORMED_SET_TIME_PREFIX = "0001-01-01T00:00:00"
 
 mcp = FastMCP("tonal", instructions="""Tonal smart cable machine integration.
 Provides muscle readiness, strength tracking, workout history with per-set weights/1RM,
@@ -180,6 +181,18 @@ def _load_multiplier(movement):
 
 def _score_or_none(value):
     return round(value, 2) if type(value) in (int, float) and 0 <= value <= 1 else None
+
+
+def _set_was_performed(set_activity):
+    begin_time = set_activity.get("beginTime")
+    if isinstance(begin_time, str):
+        return bool(begin_time) and not begin_time.startswith(
+            UNPERFORMED_SET_TIME_PREFIX
+        )
+    begin_time_mcb = set_activity.get("beginTimeMCB")
+    if type(begin_time_mcb) in (int, float):
+        return begin_time_mcb > 0
+    return bool(set_activity.get("repCount")) or bool(set_activity.get("duration"))
 
 
 def _activities(data):
@@ -354,6 +367,7 @@ def get_workout_detail(activity_id: str) -> dict:
                               "on_machine": on_machine, "counts_reps": counts_reps,
                               "sets": [], "warmup_sets": []}
         multiplier = _load_multiplier(movement)
+        performed = _set_was_performed(s)
         rom = s.get("rom")
         inconsistency = s.get("inconsistencyScore")
         suggested = s.get("suggestedWeight")
@@ -367,11 +381,12 @@ def get_workout_detail(activity_id: str) -> dict:
               "rom_inches": (round(rom, 1)
                              if on_machine and rom is not None and rom > 0 else None),
               "inconsistency_score": (_score_or_none(inconsistency)
-                                      if on_machine else None),
+                                      if on_machine and performed else None),
               "struggling_score": (_score_or_none(s.get("strugglingScore"))
-                                   if on_machine else None),
+                                   if on_machine and performed else None),
               "suggested_weight": (round(suggested * multiplier, 1)
                                    if (on_machine
+                                       and performed
                                        and type(suggested) in (int, float)
                                        and suggested >= 0)
                                    else None),

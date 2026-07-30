@@ -60,6 +60,7 @@ AUTH0_CLIENT_ID = "ERCyexW-xoVG_Yy3RDe-eV4xsOnRHP6L"
 GET_TIMEOUT = 15
 POST_TIMEOUT = 30
 REST_MOVEMENT_ID = "00000000-0000-0000-0000-000000000005"
+UNPERFORMED_SET_TIME_PREFIX = "0001-01-01T00:00:00"
 
 
 # ── Token Management ──────────────────────────────────────────────────
@@ -256,6 +257,18 @@ def _movement_name(movement_map, mid):
 
 def _score_or_none(value):
     return round(value, 2) if type(value) in (int, float) and 0 <= value <= 1 else None
+
+
+def _set_was_performed(set_activity):
+    begin_time = set_activity.get("beginTime")
+    if isinstance(begin_time, str):
+        return bool(begin_time) and not begin_time.startswith(
+            UNPERFORMED_SET_TIME_PREFIX
+        )
+    begin_time_mcb = set_activity.get("beginTimeMCB")
+    if type(begin_time_mcb) in (int, float):
+        return begin_time_mcb > 0
+    return bool(set_activity.get("repCount")) or bool(set_activity.get("duration"))
 
 
 # ── Auth Commands ─────────────────────────────────────────────────────
@@ -518,6 +531,7 @@ def cmd_detail(args):
                 "warm_up_sets": [],
             }
         rom = s.get("rom")
+        performed = _set_was_performed(s)
         inconsistency = s.get("inconsistencyScore")
         suggested = s.get("suggestedWeight")
         set_data = {
@@ -536,11 +550,12 @@ def cmd_detail(args):
             "rom_inches": (round(rom, 1)
                            if on_machine and rom is not None and rom > 0 else None),
             "inconsistency_score": (_score_or_none(inconsistency)
-                                    if on_machine else None),
+                                    if on_machine and performed else None),
             "struggling_score": (_score_or_none(s.get("strugglingScore"))
-                                 if on_machine else None),
+                                 if on_machine and performed else None),
             "suggested_weight": (round(suggested, 1)
                                  if (on_machine
+                                     and performed
                                      and type(suggested) in (int, float)
                                      and suggested >= 0)
                                  else None),

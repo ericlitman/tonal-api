@@ -181,7 +181,7 @@ class WorkoutDetailTests(unittest.TestCase):
     def test_detail_filters_rest_and_normalizes_duration_movements(self):
         activity = {
             "id": "activity-1",
-            "totalVolume": 100,
+            "totalVolume": 200,
             "workoutSetActivity": [
                 {
                     "movementId": tonal_mcp.REST_MOVEMENT_ID,
@@ -214,15 +214,43 @@ class WorkoutDetailTests(unittest.TestCase):
                     "suggestedWeight": 0,
                     "strugglingScore": 0,
                     "inconsistencyScore": 0,
+                    "beginTime": "2026-07-30T12:00:00Z",
+                    "endTime": "2026-07-30T12:00:30Z",
                 },
                 {
                     "movementId": "machine",
-                    "repCount": 0,
+                    "repCount": 5,
                     "baseWeight": 20,
+                    "volume": 100,
+                    "suggestedWeight": 15,
+                    "strugglingScore": 0.23,
+                    "inconsistencyScore": 0.45,
+                    "beginTime": "2026-07-30T12:01:00Z",
+                    "endTime": "2026-07-30T12:01:30Z",
+                },
+                {
+                    "movementId": "machine",
+                    "repCount": 1,
+                    "baseWeight": 0,
                     "volume": 0,
                     "suggestedWeight": -1,
                     "strugglingScore": -1,
                     "inconsistencyScore": -1,
+                    "beginTime": "2026-07-30T12:02:00Z",
+                    "endTime": "2026-07-30T12:02:05Z",
+                },
+                {
+                    "movementId": "machine",
+                    "repCount": 0,
+                    "baseWeight": 0,
+                    "volume": 0,
+                    "duration": 0,
+                    "suggestedWeight": 0,
+                    "strugglingScore": 0,
+                    "inconsistencyScore": 0,
+                    "spotter": True,
+                    "beginTime": "0001-01-01T00:00:00Z",
+                    "endTime": "0001-01-01T00:00:00Z",
                 },
             ],
         }
@@ -295,15 +323,25 @@ class WorkoutDetailTests(unittest.TestCase):
             self.assertEqual(machine_set["suggested_weight"], 0)
             self.assertEqual(machine_set["struggling_score"], 0)
             self.assertEqual(machine_set["inconsistency_score"], 0)
-            sentinel_set = by_id["machine"]["set_details"][1]
+            sentinel_set = by_id["machine"]["set_details"][2]
             self.assertIsNone(sentinel_set["suggested_weight"])
             self.assertIsNone(sentinel_set["struggling_score"])
             self.assertIsNone(sentinel_set["inconsistency_score"])
+            unperformed_set = by_id["machine"]["set_details"][3]
+            self.assertEqual(unperformed_set["reps"], 0)
+            self.assertEqual(unperformed_set["weight_lbs"], 0)
+            self.assertEqual(unperformed_set["volume_lbs"], 0)
+            self.assertEqual(unperformed_set["duration_sec"], 0)
+            self.assertIsNone(unperformed_set["suggested_weight"])
+            self.assertIsNone(unperformed_set["struggling_score"])
+            self.assertIsNone(unperformed_set["inconsistency_score"])
+            self.assertTrue(unperformed_set["spotter"])
             self.assertEqual(
                 sum(movement["total_volume_lbs"]
                     for movement in result["movements"]),
                 result["total_volume_lbs"],
             )
+        self.assertEqual(cli_result["movements"][1]["avg_struggling"], 0.12)
 
     def test_cli_detail_exposes_same_performance_fields(self):
         activity = {

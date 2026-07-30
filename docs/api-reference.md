@@ -259,7 +259,10 @@ the activity feed. Each result includes the `activity_id` and HTTP `status`.
 
 The CLI and MCP detail adapters exclude the reserved Rest movement ID
 `00000000-0000-0000-0000-000000000005`. They normalize `-1` difficulty and
-consistency sentinels to `null` without discarding legitimate zero scores.
+consistency sentinels to `null` without discarding legitimate zero scores on
+performed sets. For explicitly unperformed sets, placeholder-zero difficulty,
+consistency, and suggested-weight values are `null`; actual/count fields remain
+numeric zeros and configured mode flags remain available.
 Off-machine, duration-based movements expose actual `duration_sec`,
 `prescribed_duration_sec`, and Tonal's separate `duration_based_rep_goal`;
 per-set resistance-only measurements are `null`, and the movement is marked
