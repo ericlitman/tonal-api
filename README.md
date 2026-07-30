@@ -210,6 +210,18 @@ Add to your Claude Code `settings.json`, Cursor config, or any MCP client:
 | `delete_workout` | Remove custom workout |
 | `get_volume_report` | Training volume analysis |
 
+`get_workout_history` accepts limits from 1 to 50 and enforces them locally
+because Tonal currently returns a fixed 50-row activity page. Its response
+includes `returned_count`, `available_in_page`, `requested_limit_satisfied`,
+`source_page_exhausted`, and `upstream_page_may_be_truncated`.
+`requested_limit_satisfied` means the requested number of matching rows was
+returned; `source_page_exhausted` means Tonal returned fewer than 50 source
+rows. Neither claims the upstream history is exhaustive. Volume and
+exercise-history responses also include completeness metadata; when the flag
+is false/true respectively, older activity may exist beyond the upstream page.
+Volume reports fail completeness closed and expose
+`unparseable_activity_count` when source timestamps are unusable.
+
 ## Token management
 
 Tokens expire in ~10 hours. The refresh token lasts much longer.

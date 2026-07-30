@@ -189,6 +189,16 @@ Returns recent workout activities (Tonal sessions, external activities):
 other logged activities. Only `Internal` activities have workout-detail and
 formatted-summary records.
 
+The live endpoint currently ignores common pagination inputs and returns a
+fixed 50-row bare list. The MCP adapter enforces requested history limits
+locally and reports page/completeness metadata rather than advertising an
+unverified cursor or offset contract. `requested_limit_satisfied` reports
+whether the requested number of matching activities was returned, while
+`source_page_exhausted` reports whether the observed source page contained
+fewer than 50 rows. Volume reports preserve the legacy `days` and `workouts`
+fields as aliases, return a stable zero-valued schema, and set `is_complete`
+to false when `unparseable_activity_count` is nonzero.
+
 ### Workout Detail (Raw Sets)
 ```
 GET /v6/users/{userId}/workout-activities/{activityId}

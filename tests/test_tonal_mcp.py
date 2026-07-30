@@ -327,6 +327,99 @@ class ActivityTypeTests(unittest.TestCase):
             [workout["activity_id"] for workout in strength_history["workouts"]],
             ["internal-1"],
         )
+        self.assertEqual(all_history["returned_count"], 2)
+        self.assertEqual(strength_history["available_in_page"], 1)
+        self.assertFalse(strength_history["requested_limit_satisfied"])
+        self.assertTrue(strength_history["source_page_exhausted"])
+        self.assertFalse(all_history["upstream_page_may_be_truncated"])
+
+    def test_history_enforces_local_limit_and_reports_fixed_page(self):
+        activities = [
+            {
+                **self.internal,
+                "activityId": f"internal-{index}",
+                "activityTime": f"2026-07-{29 - index:02d}T12:00:00Z",
+            }
+            for index in range(20)
+        ] + [
+            {
+                **self.external,
+                "activityId": f"external-{index}",
+                "activityTime": f"2026-06-{30 - index:02d}T12:00:00Z",
+            }
+            for index in range(30)
+        ]
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activities),
+        ):
+            one = tonal_mcp.get_workout_history(limit=1)
+            five = tonal_mcp.get_workout_history(limit=5)
+            default = tonal_mcp.get_workout_history()
+            fifty = tonal_mcp.get_workout_history(limit=50)
+            strength = tonal_mcp.get_workout_history(limit=10, strength_only=True)
+
+        self.assertEqual(len(one["workouts"]), 1)
+        self.assertEqual(len(five["workouts"]), 5)
+        self.assertEqual(len(default["workouts"]), 10)
+        self.assertEqual(len(fifty["workouts"]), 50)
+        self.assertEqual(len(strength["workouts"]), 10)
+        self.assertEqual(strength["available_in_page"], 20)
+        self.assertTrue(strength["more_available_in_page"])
+        self.assertTrue(strength["requested_limit_satisfied"])
+        self.assertFalse(strength["source_page_exhausted"])
+        self.assertTrue(strength["upstream_page_may_be_truncated"])
+        self.assertEqual(strength["source_count"], 50)
+
+    def test_strength_limit_reports_incomplete_when_fixed_page_has_four_matches(self):
+        activities = [
+            {**self.internal, "activityId": f"internal-{index}"}
+            for index in range(4)
+        ] + [
+            {**self.external, "activityId": f"external-{index}"}
+            for index in range(46)
+        ]
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activities),
+        ):
+            history = tonal_mcp.get_workout_history(limit=10, strength_only=True)
+
+        self.assertEqual(history["returned_count"], 4)
+        self.assertEqual(history["available_in_page"], 4)
+        self.assertFalse(history["requested_limit_satisfied"])
+        self.assertFalse(history["source_page_exhausted"])
+        self.assertTrue(history["upstream_page_may_be_truncated"])
+
+    def test_strength_limit_distinguishes_short_page_from_satisfied_limit(self):
+        activities = [
+            {**self.internal, "activityId": f"internal-{index}"}
+            for index in range(4)
+        ] + [
+            {**self.external, "activityId": f"external-{index}"}
+            for index in range(45)
+        ]
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activities),
+        ):
+            history = tonal_mcp.get_workout_history(limit=10, strength_only=True)
+
+        self.assertEqual(history["returned_count"], 4)
+        self.assertFalse(history["requested_limit_satisfied"])
+        self.assertTrue(history["source_page_exhausted"])
+
+    def test_history_rejects_invalid_limits_without_api_call(self):
+        with patch.object(tonal_mcp, "_api_get") as api_get:
+            zero = tonal_mcp.get_workout_history(limit=0)
+            too_large = tonal_mcp.get_workout_history(limit=51)
+
+        self.assertEqual(zero["error"], "invalid_limit")
+        self.assertEqual(too_large["error"], "invalid_limit")
+        api_get.assert_not_called()
 
     def test_volume_report_counts_only_internal_activities(self):
         activity_time = datetime.now(timezone.utc).isoformat()
@@ -342,6 +435,125 @@ class ActivityTypeTests(unittest.TestCase):
         self.assertEqual(report["total_workouts"], 1)
         self.assertEqual(report["total_volume_lbs"], 100)
         self.assertEqual(report["avg_volume_per_session"], 100)
+        self.assertEqual(report["unparseable_activity_count"], 0)
+        self.assertTrue(report["is_complete"])
+
+    def test_volume_report_marks_incomplete_fixed_page(self):
+        activity_time = datetime.now(timezone.utc).isoformat()
+        activities = [
+            {
+                **self.internal,
+                "activityId": f"internal-{index}",
+                "activityTime": activity_time,
+            }
+            for index in range(50)
+        ]
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activities),
+        ):
+            report = tonal_mcp.get_volume_report(days=365)
+
+        self.assertEqual(report["source_count"], 50)
+        self.assertFalse(report["is_complete"])
+
+    def test_volume_report_marks_full_page_complete_when_cutoff_is_covered(self):
+        activities = [
+            {
+                **self.internal,
+                "activityId": f"internal-{index}",
+                "activityTime": "2024-01-01T12:00:00Z",
+            }
+            for index in range(50)
+        ]
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activities),
+        ):
+            report = tonal_mcp.get_volume_report(days=365)
+
+        self.assertEqual(report["source_count"], 50)
+        self.assertTrue(report["is_complete"])
+
+    def test_volume_report_returns_stable_empty_schema(self):
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=[]),
+        ):
+            report = tonal_mcp.get_volume_report(days=30)
+
+        self.assertEqual(report["days"], 30)
+        self.assertEqual(report["period_days"], 30)
+        self.assertEqual(report["workouts"], 0)
+        self.assertEqual(report["total_workouts"], 0)
+        self.assertEqual(report["workouts_per_week"], 0)
+        self.assertEqual(report["total_volume_lbs"], 0)
+        self.assertEqual(report["avg_volume_per_session"], 0)
+        self.assertEqual(report["by_target_area"], {})
+        self.assertEqual(report["by_week"], {})
+        self.assertEqual(report["unparseable_activity_count"], 0)
+        self.assertTrue(report["is_complete"])
+
+    def test_volume_report_fails_completeness_closed_for_bad_timestamps(self):
+        activities = [
+            {
+                **self.internal,
+                "activityId": f"internal-{index}",
+                "activityTime": "2024-01-01T12:00:00Z",
+            }
+            for index in range(49)
+        ] + [{**self.internal, "activityId": "bad-time", "activityTime": 123}]
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activities),
+        ):
+            report = tonal_mcp.get_volume_report(days=365)
+
+        self.assertEqual(report["unparseable_activity_count"], 1)
+        self.assertFalse(report["is_complete"])
+        self.assertTrue(report["upstream_page_may_be_truncated"])
+
+    def test_activity_datetime_accepts_common_iso_forms_and_rejects_bad_values(self):
+        expected = datetime(2026, 7, 29, 12, tzinfo=timezone.utc)
+        self.assertEqual(
+            tonal_mcp._activity_datetime({"activityTime": "2026-07-29T12:00:00Z"}),
+            expected,
+        )
+        self.assertEqual(
+            tonal_mcp._activity_datetime(
+                {"activityTime": "2026-07-29T08:00:00-04:00"}
+            ),
+            expected,
+        )
+        self.assertEqual(
+            tonal_mcp._activity_datetime({"activityTime": "2026-07-29T12:00:00"}),
+            expected,
+        )
+        for value in (None, 123, {}, "not-a-date"):
+            self.assertIsNone(tonal_mcp._activity_datetime({"activityTime": value}))
+
+    def test_exercise_history_marks_fixed_page_as_possibly_truncated(self):
+        activities = [
+            {**self.external, "activityId": f"external-{index}"}
+            for index in range(50)
+        ]
+
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(
+                tonal_mcp,
+                "_movement_map",
+                return_value={"movement-1": {"name": "Bench Press"}},
+            ),
+            patch.object(tonal_mcp, "_api_get", return_value=activities),
+        ):
+            history = tonal_mcp.get_exercise_history("Bench")
+
+        self.assertEqual(history["source_count"], 50)
+        self.assertTrue(history["history_may_be_truncated"])
 
     def test_exercise_history_skips_external_detail_lookup(self):
         detail = {
@@ -377,6 +589,7 @@ class ActivityTypeTests(unittest.TestCase):
 
         self.assertEqual(history["sessions_found"], 1)
         self.assertEqual(history["sessions"][0]["total_volume_lbs"], 100)
+        self.assertFalse(history["history_may_be_truncated"])
 
     def test_detail_tools_return_structured_result_for_404(self):
         def api_get(endpoint, params=None):

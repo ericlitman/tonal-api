@@ -50,6 +50,7 @@ AUTH0_DOMAIN = "tonal.auth0.com"
 AUTH0_CLIENT_ID = "ERCyexW-xoVG_Yy3RDe-eV4xsOnRHP6L"
 GET_TIMEOUT = 15
 POST_TIMEOUT = 30
+ACTIVITY_PAGE_SIZE = 50
 
 mcp = FastMCP("tonal", instructions="""Tonal smart cable machine integration.
 Provides muscle readiness, strength tracking, workout history with per-set weights/1RM,
@@ -180,6 +181,26 @@ def _activities(data):
     return data if isinstance(data, list) else data.get("activities", data.get("data", []))
 
 
+def _activity_page(uid):
+    data = _api_get(
+        f"/v6/users/{uid}/activities", params={"limit": ACTIVITY_PAGE_SIZE}
+    )
+    return _activities(data)
+
+
+def _activity_datetime(activity):
+    value = activity.get("activityTime")
+    if not isinstance(value, str) or not value:
+        return None
+    if value.endswith(("Z", "z")):
+        value = f"{value[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
 def _is_strength_activity(activity):
     return activity.get("activityType") == "Internal"
 
@@ -190,9 +211,8 @@ def _strength_activity_data(endpoint, activity_id, uid, activity_type=None):
     except ValueError as error:
         if str(error).startswith("Tonal API 404:"):
             if activity_type is None:
-                history = _api_get(f"/v6/users/{uid}/activities", params={"limit": 50})
                 activity_type = next(
-                    (activity.get("activityType") for activity in _activities(history)
+                    (activity.get("activityType") for activity in _activity_page(uid)
                      if activity.get("activityId") == activity_id),
                     None,
                 )
@@ -281,11 +301,15 @@ def get_profile() -> dict:
 @mcp.tool()
 def get_workout_history(limit: int = 10, strength_only: bool = False) -> dict:
     """Get recent activity history, optionally limited to Tonal strength workouts."""
+    if type(limit) is not int or not 1 <= limit <= ACTIVITY_PAGE_SIZE:
+        return {"error": "invalid_limit", "min": 1, "max": ACTIVITY_PAGE_SIZE}
     uid = _uid()
-    data = _api_get(f"/v6/users/{uid}/activities", params={"limit": limit})
-    activities = _activities(data)
+    activities = _activity_page(uid)
+    source_count = len(activities)
     if strength_only:
         activities = [activity for activity in activities if _is_strength_activity(activity)]
+    available = len(activities)
+    activities = activities[:limit]
     return {"workouts": [{"activity_id": a.get("activityId"), "date": a.get("activityTime","")[:10],
                           "activity_type": a.get("activityType") or "Unknown",
                           "has_strength_data": _is_strength_activity(a),
@@ -293,7 +317,13 @@ def get_workout_history(limit: int = 10, strength_only: bool = False) -> dict:
                           "duration_min": round(a.get("workoutPreview",{}).get("totalDuration",0)/60),
                           "total_volume_lbs": a.get("workoutPreview",{}).get("totalVolume"),
                           "target_area": a.get("workoutPreview",{}).get("targetArea","")}
-                         for a in activities]}
+                         for a in activities],
+            "returned_count": len(activities), "available_in_page": available,
+            "source_count": source_count,
+            "more_available_in_page": available > len(activities),
+            "requested_limit_satisfied": len(activities) == limit,
+            "source_page_exhausted": source_count < ACTIVITY_PAGE_SIZE,
+            "upstream_page_may_be_truncated": source_count == ACTIVITY_PAGE_SIZE}
 
 
 @mcp.tool()
@@ -428,8 +458,7 @@ def get_exercise_history(exercise_name: str) -> dict:
         return {"too_many": len(targets), "matches": [{"id": mid, "name": m.get("name")}
                 for mid, m in list(targets.items())[:10]]}
 
-    history = _api_get(f"/v6/users/{uid}/activities", params={"limit": 50})
-    activities = _activities(history)
+    activities = _activity_page(uid)
 
     by_date = {}
     for act in activities:
@@ -472,7 +501,9 @@ def get_exercise_history(exercise_name: str) -> dict:
         delta = sessions[-1]["avg_weight_lbs"] - sessions[0]["avg_weight_lbs"]
         progression = {"weight_change_lbs": round(delta,1),
                        "direction": "increasing" if delta > 0 else "decreasing" if delta < 0 else "flat"}
-    return {"exercise": name, "sessions_found": len(sessions), "progression": progression, "sessions": sessions}
+    return {"exercise": name, "sessions_found": len(sessions), "progression": progression,
+            "sessions": sessions, "source_count": len(activities),
+            "history_may_be_truncated": len(activities) == ACTIVITY_PAGE_SIZE}
 
 
 @mcp.tool()
@@ -560,33 +591,44 @@ def delete_workout(workout_id: str) -> dict:
 def get_volume_report(days: int = 30) -> dict:
     """Training volume and frequency analysis over N days, broken down by week and target area."""
     uid = _uid()
-    data = _api_get(f"/v6/users/{uid}/activities", params={"limit": min(days, 100)})
-    activities = _activities(data)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    recent = [a for a in activities
-              if _is_strength_activity(a) and a.get("activityTime","") >= cutoff]
-    if not recent:
-        return {"days": days, "workouts": 0}
+    activities = _activity_page(uid)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    dated_activities = [(activity, _activity_datetime(activity)) for activity in activities]
+    activity_times = [activity_time for _, activity_time in dated_activities if activity_time]
+    unparseable_activity_count = len(dated_activities) - len(activity_times)
+    oldest = min(activity_times, default=None)
+    is_complete = (unparseable_activity_count == 0
+                   and (len(activities) < ACTIVITY_PAGE_SIZE
+                        or bool(oldest and oldest <= cutoff)))
+    recent = [(activity, activity_time)
+              for activity, activity_time in dated_activities
+              if (_is_strength_activity(activity)
+                  and activity_time
+                  and activity_time >= cutoff)]
 
-    total_vol, total_dur, by_area, by_week = 0, 0, {}, {}
-    for a in recent:
+    total_vol, by_area, by_week = 0, {}, {}
+    for a, activity_time in recent:
         p = a.get("workoutPreview", {})
-        v, d = p.get("totalVolume", 0), p.get("totalDuration", 0)
-        total_vol += v; total_dur += d
+        v = p.get("totalVolume", 0)
+        total_vol += v
         area = p.get("targetArea", "OTHER")
         by_area[area] = by_area.get(area, 0) + 1
-        ds = a.get("activityTime","")[:10]
-        try:
-            dt = datetime.strptime(ds, "%Y-%m-%d")
-            ws = (dt - timedelta(days=dt.weekday())).strftime("%Y-%m-%d")
-            if ws not in by_week: by_week[ws] = {"sessions": 0, "volume_lbs": 0}
-            by_week[ws]["sessions"] += 1; by_week[ws]["volume_lbs"] += v
-        except Exception: pass
+        week_start = activity_time - timedelta(days=activity_time.weekday())
+        ws = week_start.date().isoformat()
+        if ws not in by_week: by_week[ws] = {"sessions": 0, "volume_lbs": 0}
+        by_week[ws]["sessions"] += 1; by_week[ws]["volume_lbs"] += v
 
-    return {"period_days": days, "total_workouts": len(recent),
-            "workouts_per_week": round(len(recent)/(days/7), 1),
-            "total_volume_lbs": total_vol, "avg_volume_per_session": round(total_vol/len(recent)),
-            "by_target_area": by_area, "by_week": dict(sorted(by_week.items()))}
+    return {"period_days": days, "days": days,
+            "total_workouts": len(recent), "workouts": len(recent),
+            "workouts_per_week": round(len(recent)/(days/7), 1) if days else 0,
+            "total_volume_lbs": total_vol,
+            "avg_volume_per_session": round(total_vol/len(recent)) if recent else 0,
+            "by_target_area": by_area, "by_week": dict(sorted(by_week.items())),
+            "source_count": len(activities),
+            "oldest_activity_date": oldest.date().isoformat() if oldest else None,
+            "unparseable_activity_count": unparseable_activity_count,
+            "upstream_page_may_be_truncated": len(activities) == ACTIVITY_PAGE_SIZE,
+            "is_complete": is_complete}
 
 
 if __name__ == "__main__":
