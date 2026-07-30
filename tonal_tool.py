@@ -59,6 +59,7 @@ AUTH0_CLIENT_ID = "ERCyexW-xoVG_Yy3RDe-eV4xsOnRHP6L"
 # Timeouts
 GET_TIMEOUT = 15
 POST_TIMEOUT = 30
+REST_MOVEMENT_ID = "00000000-0000-0000-0000-000000000005"
 
 
 # ── Token Management ──────────────────────────────────────────────────
@@ -251,6 +252,10 @@ def _get_movement_map():
 def _movement_name(movement_map, mid):
     m = movement_map.get(mid)
     return m.get("name", mid[:8]) if m else mid[:8]
+
+
+def _score_or_none(value):
+    return round(value, 2) if type(value) in (int, float) and 0 <= value <= 1 else None
 
 
 # ── Auth Commands ─────────────────────────────────────────────────────
@@ -498,28 +503,47 @@ def cmd_detail(args):
     movements = {}
     for s in data.get("workoutSetActivity", []):
         mid = s.get("movementId", "unknown")
+        if mid == REST_MOVEMENT_ID:
+            continue
+        movement = movement_map.get(mid, {})
+        on_machine = movement.get("onMachine") is not False
+        counts_reps = movement.get("countReps") is not False
         if mid not in movements:
             movements[mid] = {
                 "movement_id": mid,
                 "name": _movement_name(movement_map, mid),
+                "on_machine": on_machine,
+                "counts_reps": counts_reps,
                 "sets": [],
                 "warm_up_sets": [],
             }
         rom = s.get("rom")
         inconsistency = s.get("inconsistencyScore")
+        suggested = s.get("suggestedWeight")
         set_data = {
-            "reps": s.get("repCount", s.get("prescribedReps", 0)),
-            "weight_lbs": s.get("baseWeight", s.get("avgWeight", 0)),
-            "max_weight_lbs": s.get("maxWeight"),
-            "min_weight_lbs": s.get("minWeight"),
-            "volume_lbs": s.get("volume", s.get("totalVolume", 0)),
-            "one_rep_max": round(s.get("oneRepMax", 0)) if s.get("oneRepMax") else None,
-            "max_power_watts": round(s.get("maxConPower", 0)) if s.get("maxConPower") else None,
-            "rom_inches": round(rom, 1) if rom is not None and rom > 0 else None,
-            "inconsistency_score": (round(inconsistency, 2)
-                                    if inconsistency is not None and inconsistency > 0 else None),
-            "struggling_score": round(s.get("strugglingScore", 0), 2) if s.get("strugglingScore") else None,
-            "suggested_weight": round(s.get("suggestedWeight", 0), 1) if s.get("suggestedWeight") else None,
+            "reps": (s.get("repCount", s.get("prescribedReps", 0))
+                     if counts_reps else None),
+            "weight_lbs": (s.get("baseWeight", s.get("avgWeight", 0))
+                           if on_machine else None),
+            "max_weight_lbs": s.get("maxWeight") if on_machine else None,
+            "min_weight_lbs": s.get("minWeight") if on_machine else None,
+            "volume_lbs": (s.get("volume", s.get("totalVolume", 0))
+                           if on_machine else None),
+            "one_rep_max": (round(s.get("oneRepMax", 0))
+                            if on_machine and s.get("oneRepMax") else None),
+            "max_power_watts": (round(s.get("maxConPower", 0))
+                                if on_machine and s.get("maxConPower") else None),
+            "rom_inches": (round(rom, 1)
+                           if on_machine and rom is not None and rom > 0 else None),
+            "inconsistency_score": (_score_or_none(inconsistency)
+                                    if on_machine else None),
+            "struggling_score": (_score_or_none(s.get("strugglingScore"))
+                                 if on_machine else None),
+            "suggested_weight": (round(suggested, 1)
+                                 if (on_machine
+                                     and type(suggested) in (int, float)
+                                     and suggested >= 0)
+                                 else None),
             "spotter": (bool(s["spotter"]) if s.get("spotter") is not None
                         else s.get("spotterMode", "OFF") not in (None, "", "OFF")),
             "eccentric": bool(s.get("eccentric", False)),
@@ -528,6 +552,10 @@ def cmd_detail(args):
             "drop_set": bool(s.get("dropSet", False)),
             "side": s.get("movementSide", "Both"),
             "duration_sec": s.get("duration"),
+            "prescribed_duration_sec": (s.get("prescribedDuration")
+                                        if not counts_reps else None),
+            "duration_based_rep_goal": (s.get("durationBasedRepGoal")
+                                        if not counts_reps else None),
         }
         if s.get("warmUp"):
             movements[mid]["warm_up_sets"].append(set_data)
@@ -541,23 +569,35 @@ def cmd_detail(args):
         warm_up_sets = m["warm_up_sets"]
         if working_sets or warm_up_sets:
             weights = [s["weight_lbs"] for s in working_sets if s["weight_lbs"]]
-            reps = [s["reps"] for s in working_sets if s["reps"]]
-            volumes = [s["volume_lbs"] for s in working_sets if s["volume_lbs"]]
-            warm_up_volume = sum(s["volume_lbs"] for s in warm_up_sets)
+            reps = [s["reps"] for s in working_sets if s["reps"] is not None]
+            volumes = [s["volume_lbs"] for s in working_sets if s["volume_lbs"] is not None]
+            warm_up_volume = sum((s["volume_lbs"] or 0) for s in warm_up_sets)
             orms = [s["one_rep_max"] for s in working_sets if s["one_rep_max"]]
             powers = [s["max_power_watts"] for s in working_sets if s["max_power_watts"]]
             struggles = [s["struggling_score"] for s in working_sets if s["struggling_score"] is not None]
+            working_volume = sum(volumes)
+            avg_weight = (round(sum(weights) / len(weights), 1)
+                          if weights else (0 if m["on_machine"] else None))
+            max_weight = max(weights) if weights else (0 if m["on_machine"] else None)
             summary = {
                 "movement_id": mid,
                 "name": m["name"],
+                "on_machine": m["on_machine"],
+                "counts_reps": m["counts_reps"],
+                "measurement_type": ("repetitions"
+                                     if m["counts_reps"] else "duration"),
                 "working_sets": len(working_sets),
                 "warm_up_sets": len(warm_up_sets),
-                "avg_weight_lbs": round(sum(weights) / len(weights), 1) if weights else 0,
-                "max_weight_lbs": max(weights) if weights else 0,
-                "total_reps": sum(reps),
-                "working_volume_lbs": sum(volumes),
+                "avg_weight_lbs": avg_weight,
+                "max_weight_lbs": max_weight,
+                "total_reps": sum(reps) if m["counts_reps"] else None,
+                "total_duration_sec": sum(
+                    (s["duration_sec"] or 0)
+                    for s in working_sets + warm_up_sets
+                ),
+                "working_volume_lbs": working_volume,
                 "warmup_volume_lbs": warm_up_volume,
-                "total_volume_lbs": sum(volumes) + warm_up_volume,
+                "total_volume_lbs": working_volume + warm_up_volume,
                 "best_1rm": max(orms) if orms else None,
                 "avg_power_watts": round(sum(powers) / len(powers)) if powers else None,
                 "avg_struggling": round(sum(struggles) / len(struggles), 2) if struggles else None,
@@ -565,7 +605,8 @@ def cmd_detail(args):
                 "warmup_set_details": warm_up_sets,
             }
             # Include Tonal's suggested next weight if available
-            suggestions = [s["suggested_weight"] for s in working_sets if s.get("suggested_weight")]
+            suggestions = [s["suggested_weight"] for s in working_sets
+                           if s.get("suggested_weight") is not None]
             if suggestions:
                 summary["tonal_suggested_weight"] = round(max(suggestions), 1)
             movement_summaries.append(summary)

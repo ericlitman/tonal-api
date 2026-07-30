@@ -257,6 +257,19 @@ the activity feed. Each result includes the `activity_id` and HTTP `status`.
 | `beginTime` | string | ISO 8601 |
 | `endTime` | string | ISO 8601 |
 
+The CLI and MCP detail adapters exclude the reserved Rest movement ID
+`00000000-0000-0000-0000-000000000005`. They normalize `-1` difficulty and
+consistency sentinels to `null` without discarding legitimate zero scores.
+Off-machine, duration-based movements expose actual `duration_sec`,
+`prescribed_duration_sec`, and Tonal's separate `duration_based_rep_goal`;
+per-set resistance-only measurements are `null`, and the movement is marked
+with `on_machine: false`, `counts_reps: false`, and
+`measurement_type: "duration"`. Per-movement volume aggregates stay numeric,
+with zero representing no digital-resistance contribution. Top-level volume
+also measures Tonal's digital resistance and excludes unmeasured bodyweight
+work. `measurement_type` describes repetition-versus-duration counting, so a
+timed on-machine movement may still include measured resistance.
+
 ### Formatted Workout Summary
 ```
 GET /v6/formatted/users/{userId}/workout-summaries/{activityId}

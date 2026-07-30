@@ -51,6 +51,7 @@ AUTH0_CLIENT_ID = "ERCyexW-xoVG_Yy3RDe-eV4xsOnRHP6L"
 GET_TIMEOUT = 15
 POST_TIMEOUT = 30
 ACTIVITY_PAGE_SIZE = 50
+REST_MOVEMENT_ID = "00000000-0000-0000-0000-000000000005"
 
 mcp = FastMCP("tonal", instructions="""Tonal smart cable machine integration.
 Provides muscle readiness, strength tracking, workout history with per-set weights/1RM,
@@ -175,6 +176,10 @@ def _movement_map():
 def _load_multiplier(movement):
     info = movement.get("onMachineInfo") or {}
     return 2 if movement.get("isBilateral") and info.get("accessory") == "StraightBar" else 1
+
+
+def _score_or_none(value):
+    return round(value, 2) if type(value) in (int, float) and 0 <= value <= 1 else None
 
 
 def _activities(data):
@@ -339,22 +344,37 @@ def get_workout_detail(activity_id: str) -> dict:
     movements = {}
     for s in data.get("workoutSetActivity", []):
         mid = s.get("movementId", "")
+        if mid == REST_MOVEMENT_ID:
+            continue
         movement = mm.get(mid, {})
+        on_machine = movement.get("onMachine") is not False
+        counts_reps = movement.get("countReps") is not False
         if mid not in movements:
             movements[mid] = {"name": movement.get("name", mid[:8]), "movement_id": mid,
+                              "on_machine": on_machine, "counts_reps": counts_reps,
                               "sets": [], "warmup_sets": []}
         multiplier = _load_multiplier(movement)
         rom = s.get("rom")
         inconsistency = s.get("inconsistencyScore")
-        sd = {"reps": s.get("repCount", 0), "weight_lbs": s.get("baseWeight", 0) * multiplier,
-              "volume_lbs": s.get("volume", 0),
-              "one_rep_max": round(s.get("oneRepMax", 0) * multiplier) if s.get("oneRepMax") else None,
-              "max_power_watts": round(s.get("maxConPower", 0)) or None,
-              "rom_inches": round(rom, 1) if rom is not None and rom > 0 else None,
-              "inconsistency_score": (round(inconsistency, 2)
-                                      if inconsistency is not None and inconsistency > 0 else None),
-              "struggling_score": round(s.get("strugglingScore", 0), 2) if s.get("strugglingScore") else None,
-              "suggested_weight": round(s.get("suggestedWeight", 0) * multiplier, 1) if s.get("suggestedWeight") else None,
+        suggested = s.get("suggestedWeight")
+        sd = {"reps": s.get("repCount", 0) if counts_reps else None,
+              "weight_lbs": s.get("baseWeight", 0) * multiplier if on_machine else None,
+              "volume_lbs": s.get("volume", 0) if on_machine else None,
+              "one_rep_max": (round(s.get("oneRepMax", 0) * multiplier)
+                              if on_machine and s.get("oneRepMax") else None),
+              "max_power_watts": (round(s.get("maxConPower", 0)) or None
+                                  if on_machine else None),
+              "rom_inches": (round(rom, 1)
+                             if on_machine and rom is not None and rom > 0 else None),
+              "inconsistency_score": (_score_or_none(inconsistency)
+                                      if on_machine else None),
+              "struggling_score": (_score_or_none(s.get("strugglingScore"))
+                                   if on_machine else None),
+              "suggested_weight": (round(suggested * multiplier, 1)
+                                   if (on_machine
+                                       and type(suggested) in (int, float)
+                                       and suggested >= 0)
+                                   else None),
               "spotter": (bool(s["spotter"]) if s.get("spotter") is not None
                           else s.get("spotterMode", "OFF") not in (None, "", "OFF")),
               "eccentric": bool(s.get("eccentric", False)),
@@ -362,6 +382,10 @@ def get_workout_detail(activity_id: str) -> dict:
               "burnout": bool(s.get("burnout", False)),
               "drop_set": bool(s.get("dropSet", False)),
               "duration_sec": s.get("duration"),
+              "prescribed_duration_sec": (s.get("prescribedDuration")
+                                          if not counts_reps else None),
+              "duration_based_rep_goal": (s.get("durationBasedRepGoal")
+                                          if not counts_reps else None),
               "side": s.get("movementSide", "Both")}
         if s.get("warmUp"):
             movements[mid]["warmup_sets"].append(sd)
@@ -374,12 +398,23 @@ def get_workout_detail(activity_id: str) -> dict:
         warmup_sets = m["warmup_sets"]
         if ws or warmup_sets:
             weights = [s["weight_lbs"] for s in ws if s["weight_lbs"]]
-            working_volume = sum(s["volume_lbs"] for s in ws)
-            warmup_volume = sum(s["volume_lbs"] for s in warmup_sets)
+            working_volume = sum((s["volume_lbs"] or 0) for s in ws)
+            warmup_volume = sum((s["volume_lbs"] or 0) for s in warmup_sets)
+            avg_weight = (round(sum(weights)/len(weights), 1)
+                          if weights else (0 if m["on_machine"] else None))
             summaries.append({"name": m["name"], "movement_id": mid,
+                              "on_machine": m["on_machine"],
+                              "counts_reps": m["counts_reps"],
+                              "measurement_type": ("repetitions"
+                                                   if m["counts_reps"] else "duration"),
                               "working_sets": len(ws), "warmup_sets": len(warmup_sets),
-                              "avg_weight_lbs": round(sum(weights)/len(weights),1) if weights else 0,
-                              "total_reps": sum(s["reps"] for s in ws),
+                              "avg_weight_lbs": avg_weight,
+                              "total_reps": (sum((s["reps"] or 0) for s in ws)
+                                             if m["counts_reps"] else None),
+                              "total_duration_sec": sum(
+                                  (s["duration_sec"] or 0)
+                                  for s in ws + warmup_sets
+                              ),
                               "working_volume_lbs": working_volume,
                               "warmup_volume_lbs": warmup_volume,
                               "total_volume_lbs": working_volume + warmup_volume,

@@ -178,6 +178,133 @@ class WorkoutDetailTests(unittest.TestCase):
             1,
         )
 
+    def test_detail_filters_rest_and_normalizes_duration_movements(self):
+        activity = {
+            "id": "activity-1",
+            "totalVolume": 100,
+            "workoutSetActivity": [
+                {
+                    "movementId": tonal_mcp.REST_MOVEMENT_ID,
+                    "repCount": 0,
+                    "baseWeight": 0,
+                    "volume": 0,
+                },
+                {
+                    "movementId": "bodyweight",
+                    "repCount": 0,
+                    "baseWeight": 5,
+                    "maxWeight": 7,
+                    "minWeight": 3,
+                    "volume": 0,
+                    "oneRepMax": 5,
+                    "suggestedWeight": 10,
+                    "strugglingScore": 0.5,
+                    "inconsistencyScore": 0.25,
+                    "maxConPower": 100,
+                    "rom": 12,
+                    "duration": 45,
+                    "prescribedDuration": 45,
+                    "durationBasedRepGoal": 13,
+                },
+                {
+                    "movementId": "machine",
+                    "repCount": 5,
+                    "baseWeight": 20,
+                    "volume": 100,
+                    "suggestedWeight": 0,
+                    "strugglingScore": 0,
+                    "inconsistencyScore": 0,
+                },
+                {
+                    "movementId": "machine",
+                    "repCount": 0,
+                    "baseWeight": 20,
+                    "volume": 0,
+                    "suggestedWeight": -1,
+                    "strugglingScore": -1,
+                    "inconsistencyScore": -1,
+                },
+            ],
+        }
+        movement_map = {
+            tonal_mcp.REST_MOVEMENT_ID: {
+                "name": "Rest",
+                "onMachine": False,
+                "countReps": False,
+            },
+            "bodyweight": {
+                "name": "Beast Pushup",
+                "onMachine": False,
+                "countReps": False,
+            },
+            "machine": {
+                "name": "Bench Press",
+                "onMachine": True,
+                "countReps": True,
+            },
+        }
+        with (
+            patch.object(tonal_mcp, "_uid", return_value="user-1"),
+            patch.object(tonal_mcp, "_api_get", return_value=activity),
+            patch.object(tonal_mcp, "_movement_map", return_value=movement_map),
+        ):
+            mcp_result = tonal_mcp.get_workout_detail("activity-1")
+        with (
+            patch.object(tonal_tool, "get_user_id", return_value="user-1"),
+            patch.object(tonal_tool, "api_get", return_value=activity),
+            patch.object(tonal_tool, "_get_movement_map", return_value=movement_map),
+        ):
+            cli_result = tonal_tool.cmd_detail(["activity-1"])
+
+        for result in (mcp_result, cli_result):
+            by_id = {
+                movement["movement_id"]: movement
+                for movement in result["movements"]
+            }
+            self.assertNotIn(tonal_mcp.REST_MOVEMENT_ID, by_id)
+
+            bodyweight = by_id["bodyweight"]
+            self.assertFalse(bodyweight["on_machine"])
+            self.assertFalse(bodyweight["counts_reps"])
+            self.assertEqual(bodyweight["measurement_type"], "duration")
+            self.assertIsNone(bodyweight["avg_weight_lbs"])
+            self.assertIsNone(bodyweight["total_reps"])
+            self.assertEqual(bodyweight["total_duration_sec"], 45)
+            self.assertEqual(bodyweight["total_volume_lbs"], 0)
+            bodyweight_set = bodyweight["set_details"][0]
+            for field in (
+                "reps",
+                "weight_lbs",
+                "volume_lbs",
+                "one_rep_max",
+                "max_power_watts",
+                "rom_inches",
+                "suggested_weight",
+                "struggling_score",
+                "inconsistency_score",
+            ):
+                self.assertIsNone(bodyweight_set[field])
+            self.assertEqual(bodyweight_set["duration_sec"], 45)
+            self.assertEqual(bodyweight_set["prescribed_duration_sec"], 45)
+            self.assertEqual(bodyweight_set["duration_based_rep_goal"], 13)
+            if "max_weight_lbs" in bodyweight_set:
+                self.assertIsNone(bodyweight_set["max_weight_lbs"])
+                self.assertIsNone(bodyweight_set["min_weight_lbs"])
+
+            machine_set = by_id["machine"]["set_details"][0]
+            self.assertEqual(machine_set["suggested_weight"], 0)
+            self.assertEqual(machine_set["struggling_score"], 0)
+            self.assertEqual(machine_set["inconsistency_score"], 0)
+            sentinel_set = by_id["machine"]["set_details"][1]
+            self.assertIsNone(sentinel_set["suggested_weight"])
+            self.assertIsNone(sentinel_set["struggling_score"])
+            self.assertIsNone(sentinel_set["inconsistency_score"])
+            self.assertEqual(
+                sum(movement["total_volume_lbs"]
+                    for movement in result["movements"]),
+                result["total_volume_lbs"],
+            )
+
     def test_cli_detail_exposes_same_performance_fields(self):
         activity = {
             "id": "activity-1",

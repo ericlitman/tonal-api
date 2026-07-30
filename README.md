@@ -119,7 +119,20 @@ When you pull workout details, Tonal gives you remarkably rich per-set data:
 
 Both the CLI `detail` command and MCP `get_workout_detail` project ROM,
 consistency, spotter, eccentric, chains, burnout, drop-set, and duration fields.
-Unmeasured ROM and consistency values (`0` or `-1`) are returned as `null`.
+The reserved Rest movement (`00000000-0000-0000-0000-000000000005`) is
+excluded. Difficulty/consistency sentinels (`-1`) are returned as `null`, while
+valid zero scores remain `0`.
+
+For catalog movements with `onMachine: false` and `countReps: false`, detail
+responses use `measurement_type: "duration"`, expose `duration_sec` and
+`prescribed_duration_sec` plus Tonal's separate `duration_based_rep_goal`, and
+return resistance-only measurements such as reps, pounds, volume, 1RM, power,
+ROM, and difficulty as `null`. Per-movement volume aggregates remain numeric
+and use `0` for off-machine work so mixed-workout totals remain safely
+summable. Workout `total_volume_lbs` is Tonal's digital-resistance volume; it
+does not quantify off-machine bodyweight work.
+`measurement_type` describes repetition-versus-duration counting; a timed
+on-machine movement can still carry measured resistance fields.
 
 Raw detail frequently reports `movementSide: "Both"` even for unilateral
 movements. Use MCP `get_performance_summary` when you need the formatted
