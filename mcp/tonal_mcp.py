@@ -394,6 +394,38 @@ def get_exercise_history(exercise_name: str) -> dict:
     return {"exercise": name, "sessions_found": len(sessions), "progression": progression, "sessions": sessions}
 
 
+def _expand_workout_blocks(blocks, movement_map):
+    all_sets = []
+    bn = 1
+    for block in blocks:
+        exercises = block.get("exercises", [])
+        if not exercises:
+            continue
+        max_r = max(ex.get("sets", 3) for ex in exercises)
+        for r in range(1, max_r + 1):
+            for ei, ex in enumerate(exercises):
+                if r > ex.get("sets", 3):
+                    continue
+                mid = ex.get("movement_id", "")
+                movement = movement_map.get(mid, {})
+                s = {"movementId": mid, "blockStart": (r==1 and ei==0), "blockNumber": bn,
+                     "setGroup": ei+1, "round": r, "repetition": r, "repetitionTotal": ex.get("sets",3),
+                     "spotter": ex.get("spotter",False), "eccentric": ex.get("eccentric",False),
+                     "chains": ex.get("chains",False), "flex": False,
+                     "warmUp": ex.get("warm_up", ex.get("warmUp",False)),
+                     "burnout": ex.get("burnout",False), "dropSet": ex.get("drop_set",False),
+                     "weightPercentage": ex.get("weight_percentage",100), "description": ""}
+                if (not movement.get("countReps", True)) or ex.get("duration"):
+                    s["prescribedDuration"] = ex.get("duration", 30)
+                    s["prescribedResistanceLevel"] = 5
+                else:
+                    reps = ex.get("reps", 10)
+                    s["prescribedReps"] = reps * 2 if movement.get("isAlternating") else reps
+                all_sets.append({k:v for k,v in s.items() if v is not None})
+        bn += 1
+    return all_sets
+
+
 @mcp.tool()
 def create_workout(title: str, blocks: list[dict]) -> dict:
     """Create and push a custom workout to Tonal.
@@ -405,35 +437,7 @@ def create_workout(title: str, blocks: list[dict]) -> dict:
     if invalid:
         return {"error": "Invalid movement IDs", "invalid": invalid}
 
-    all_sets = []
-    bn = 1
-    for block in blocks:
-        exercises = block.get("exercises", [])
-        if not exercises:
-            continue
-        max_r = max(ex.get("sets", 3) for ex in exercises)
-        for r in range(1, max_r + 1):
-            for ei, ex in enumerate(exercises):
-                if r > ex.get("sets", 3):
-                    continue
-                mid = ex.get("movement_id", "")
-                m = mm.get(mid, {})
-                s = {"movementId": mid, "blockStart": (r==1 and ei==0), "blockNumber": bn,
-                     "setGroup": ei+1, "round": r, "repetition": r, "repetitionTotal": ex.get("sets",3),
-                     "spotter": ex.get("spotter",False), "eccentric": ex.get("eccentric",False),
-                     "chains": ex.get("chains",False), "flex": False,
-                     "warmUp": ex.get("warm_up", ex.get("warmUp",False)),
-                     "burnout": ex.get("burnout",False), "dropSet": ex.get("drop_set",False),
-                     "weightPercentage": ex.get("weight_percentage",100), "description": ""}
-                if (not m.get("countReps", True)) or ex.get("duration"):
-                    s["prescribedDuration"] = ex.get("duration", 30)
-                    s["prescribedResistanceLevel"] = 5
-                else:
-                    reps = ex.get("reps", 10)
-                    s["prescribedReps"] = reps * 2 if m.get("isAlternating") else reps
-                all_sets.append({k:v for k,v in s.items() if v is not None})
-        bn += 1
-
+    all_sets = _expand_workout_blocks(blocks, mm)
     result = _api_post("/v6/user-workouts", {"title": title, "sets": all_sets})
     return {"status": "pushed", "workout_id": result.get("id",""), "title": title, "set_count": len(all_sets)}
 
@@ -441,31 +445,8 @@ def create_workout(title: str, blocks: list[dict]) -> dict:
 @mcp.tool()
 def estimate_duration(blocks: list[dict]) -> dict:
     """Estimate how long a workout will take before pushing it to Tonal."""
-    mm = _movement_map()
-    all_sets = []
-    bn = 1
-    for block in blocks:
-        exercises = block.get("exercises", [])
-        if not exercises:
-            continue
-        max_r = max(ex.get("sets", 3) for ex in exercises)
-        for r in range(1, max_r + 1):
-            for ei, ex in enumerate(exercises):
-                if r > ex.get("sets", 3):
-                    continue
-                mid = ex.get("movement_id", "")
-                m = mm.get(mid, {})
-                s = {"movementId": mid, "blockStart": (r==1 and ei==0), "blockNumber": bn,
-                     "setGroup": ei+1, "round": r, "repetition": r, "repetitionTotal": ex.get("sets",3),
-                     "weightPercentage": 100, "description": ""}
-                if not m.get("countReps", True):
-                    s["prescribedDuration"] = ex.get("duration", 30)
-                else:
-                    reps = ex.get("reps", 10)
-                    s["prescribedReps"] = reps * 2 if m.get("isAlternating") else reps
-                all_sets.append({k:v for k,v in s.items() if v is not None})
-        bn += 1
-    result = _api_post("/v6/user-workouts/estimate", {"sets": all_sets})
+    all_sets = _expand_workout_blocks(blocks, _movement_map())
+    result = _api_post("/v6/user-workouts/estimate", all_sets)
     return {"estimated_duration_min": result.get("duration"), "set_count": len(all_sets)}
 
 
