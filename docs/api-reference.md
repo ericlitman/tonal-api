@@ -379,8 +379,12 @@ Content-Type: application/json
 POST /v6/user-workouts/estimate
 Content-Type: application/json
 
-{"sets": [ ... same format as create ... ]}
+[
+  { ... same set object format as create ... }
+]
 ```
+
+The estimate endpoint expects the set array at the top level. Unlike workout creation, do not wrap it in an object with a `sets` field.
 
 **Response:** `{"duration": 45}` (minutes)
 
