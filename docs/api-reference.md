@@ -386,7 +386,7 @@ Content-Type: application/json
 
 The estimate endpoint expects the set array at the top level. Unlike workout creation, do not wrap it in an object with a `sets` field.
 
-**Response:** `{"duration": 45}` (minutes)
+**Response:** `{"duration": 45}` (seconds)
 
 ### Delete Custom Workout
 ```

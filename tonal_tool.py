@@ -908,10 +908,13 @@ def cmd_estimate(args):
     sets = _expand_blocks(spec.get("blocks", []), movement_map)
     if not sets:
         return {"error": "No valid sets."}
-    result = api_post("/v6/user-workouts/estimate", {"sets": sets})
+    result = api_post("/v6/user-workouts/estimate", sets)
     if "error" in result:
         return result
-    return {"estimated_duration_min": result.get("duration"), "set_count": len(sets)}
+    seconds = result.get("duration")
+    return {"estimated_duration_sec": seconds,
+            "estimated_duration_min": round(seconds / 60, 1) if seconds is not None else None,
+            "set_count": len(sets)}
 
 def cmd_delete_workout(args):
     if not args:
