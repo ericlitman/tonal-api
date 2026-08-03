@@ -447,7 +447,10 @@ def estimate_duration(blocks: list[dict]) -> dict:
     """Estimate how long a workout will take before pushing it to Tonal."""
     all_sets = _expand_workout_blocks(blocks, _movement_map())
     result = _api_post("/v6/user-workouts/estimate", all_sets)
-    return {"estimated_duration_min": result.get("duration"), "set_count": len(all_sets)}
+    seconds = result.get("duration")
+    return {"estimated_duration_sec": seconds,
+            "estimated_duration_min": round(seconds / 60, 1) if seconds is not None else None,
+            "set_count": len(all_sets)}
 
 
 @mcp.tool()
